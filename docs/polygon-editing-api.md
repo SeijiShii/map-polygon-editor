@@ -76,6 +76,54 @@ Point {
 }
 ```
 
+### DraftShape の2つの用途と確定タイミング
+
+| `isClosed` | 用途 | 確定 API | 確定時の処理 |
+|-----------|------|---------|------------|
+| `true` | 閉じたポリゴン → エリアとして保存 | `saveAsArea()` | DraftShape を Area に変換して保存 |
+| `false` | 切断線 → 既存ポリゴンを分割 | `splitAsChildren()` / `splitReplace()` | ヒゲを自動除去してから分割実行 |
+
+DraftShape はいずれかの確定 API を呼ぶまで**インメモリのみ**に存在する。
+確定後は破棄される（ライブラリは保持しない）。
+
+### validateDraft
+
+`saveAsArea` / `updateAreaGeometry` と同じ検証ロジックを、例外を投げずに返す。
+アプリがリアルタイムで UI フィードバック（保存ボタン無効化・警告表示）を実装するために使う。
+
+```
+validateDraft(draft: DraftShape) → [GeometryViolation]
+
+GeometryViolation {
+  code : "TOO_FEW_VERTICES" | "SELF_INTERSECTION" | "ZERO_AREA"
+}
+// 空配列 = 有効
+```
+
+**チェック内容（`isClosed` によって異なる）：**
+
+| コード | 条件 | isClosed=true | isClosed=false |
+|--------|------|:---:|:---:|
+| `TOO_FEW_VERTICES` | true: 3点未満 / false: 2点未満 | ✓ | ✓ |
+| `SELF_INTERSECTION` | 辺が他の辺と交差している | ✓ | — |
+| `ZERO_AREA` | 全頂点が1直線上にある | ✓ | — |
+
+- `isClosed = false`（切断線）には面積・自己交差の概念がないためチェックしない
+- `saveAsArea` / `updateAreaGeometry` の内部でも同じチェックが走る（二重実装なし）
+
+### スナッピング（吸着）について
+
+スナッピング（近接する頂点・辺への自動吸着）は**ライブラリの責務外**とする。
+
+- 吸着範囲はマップのズームレベルに依存するため、ライブラリ側では判断できない
+- アプリ側が `addPoint` / `movePoint` を呼ぶ前に座標を補正する形で実装する
+
+```
+// アプリ側の実装例
+const snapped = snapToNearestVertex(rawLat, rawLng, zoomLevel, nearbyAreas)
+draft.addPoint(snapped.lat, snapped.lng)
+```
+
 ---
 
 ## API 一覧
@@ -95,6 +143,7 @@ Point {
 | `reverse()` | - | 頂点の順序を逆転（ワインディング方向を反転） |
 | `normalize()` | - | ワインディング方向を GeoJSON 標準に正規化 |
 | `toGeoJSON()` | - | GeoJSON Polygon / LineString に変換 |
+| `validateDraft(draft)` | DraftShape | geometry を検証し、違反リストを返す（空 = 有効） |
 | `undo()` | - | 直前の操作を取り消す |
 | `redo()` | - | 取り消した操作をやり直す |
 
@@ -114,19 +163,115 @@ Point {
 | メソッド | 引数 | 説明 |
 |----------|------|------|
 | `saveAsArea(draft, name, levelKey, parentId?)` | DraftShape、名称、レベルキー、親ID | DraftShape を Area として保存。レベル整合性を検証 |
-| `updateAreaGeometry(areaId, draft)` | エリアID、DraftShape | 既存エリアの geometry を更新 |
-| `deleteArea(areaId)` | エリアID | 葉エリアを削除。子を持つ場合は `AreaHasChildrenError` |
+| `bulkCreate(items)` | `[AreaInput]` | 複数の Area を一括作成。外部データのインポートに使用 |
+| `updateAreaGeometry(areaId, draft)` | エリアID、DraftShape | 既存エリアの geometry を更新。明示的な子を持つエリアには適用不可（`AreaHasChildrenError`） |
+| `deleteArea(areaId, options?)` | エリアID、`{ cascade?: bool }` | エリアを削除。`cascade: false`（デフォルト）は子を持つ場合 `AreaHasChildrenError`。`cascade: true` は子孫を再帰削除 |
 | `reparentArea(areaId, newParentId?)` | エリアID、新しい親ID（null = ルート化） | `parent_id` を変更する。レベル整合性を検証 |
 | `mergeArea(areaId, otherAreaId)` | 残すエリアID、吸収されるエリアID | 2つの兄弟エリアを1つに合体。`otherAreaId` の子を引き継ぎ削除 |
 
-#### deleteArea の HistoryEntry / ChangeSet
+#### bulkCreate の挙動
+
+外部データ（GeoJSON 等）のインポートに使用する。`saveAsArea` が DraftShape 経由の1件保存であるのに対し、
+`bulkCreate` は geometry を直接受け取り、複数 Area を一括作成する。
 
 ```
-HistoryEntry : { created: [], deleted: [area（完全スナップショット）], modified: [] }
-ChangeSet    : { created: [], deleted: [areaId], modified: [] }
+AreaInput {
+  display_name : string
+  level_key    : string
+  parent_id    : AreaID | null
+  geometry     : GeoJSON Polygon または MultiPolygon
+  metadata?    : { [key: string]: any }
+}
+
+bulkCreate(items: [AreaInput]) → [Area]
+  // 返り値は入力と同じ順序。各 Area の id は自動生成
 ```
 
-削除されたエリアの親 geometry キャッシュは再計算される（→「親 geometry キャッシュの再計算タイミング」参照）。
+**検証（全 items に対して実行）：**
+
+```
+- level_key が areaLevels に存在するか          → AreaLevelNotFoundError
+- parent_id が存在するか（null でない場合）      → AreaNotFoundError
+- area の level と parent の level が一致するか  → LevelMismatchError
+- geometry が有効か（自己交差・頂点数・面積）    → InvalidGeometryError
+```
+
+1件でもエラーがあればバッチ全体を中止する（部分適用なし）。
+
+**処理後の親 geometry 自動更新：**
+
+全 items 登録後、影響を受けた全祖先の geometry を再計算する（通常操作と同じ）。
+インポートした Area が非最下層の場合、子データのインポート後に上書きされることに注意。
+
+**HistoryEntry / ChangeSet：**
+
+```
+HistoryEntry : { created: [全Area], deleted: [], modified: [全祖先 {before, after}] }
+ChangeSet    : { created: [全Area], deleted: [], modified: [全祖先（after）] }
+```
+
+バッチ全体が1つの HistoryEntry になる（`undo` で一括取り消し可能）。
+
+**典型的な階層インポートフロー（国土数値情報 N03 の例）：**
+
+```
+// Step 1: 都道府県レベルを先にインポート
+const prefs = editor.bulkCreate(
+  prefData.map(p => ({ display_name: p.name, level_key: "prefecture", parent_id: null, geometry: p.geometry }))
+)
+
+// Step 2: 都道府県名→ID のマッピングを構築
+const prefMap = Object.fromEntries(prefs.map(p => [p.display_name, p.id]))
+
+// Step 3: 市区町村レベルをインポート（parent_id に都道府県 ID を指定）
+editor.bulkCreate(
+  features.map(f => ({
+    display_name : f.properties.N03_004,
+    level_key    : "city",
+    parent_id    : prefMap[f.properties.N03_001],
+    geometry     : f.geometry
+  }))
+)
+// → 各都道府県の geometry が子 city の Union として自動再計算される
+```
+
+#### deleteArea の挙動
+
+```
+deleteArea(
+  areaId   : AreaID,
+  options? : { cascade?: bool }   // デフォルト: { cascade: false }
+) → void
+```
+
+| オプション | 子を持つ場合 | 子を持たない場合 |
+|-----------|------------|----------------|
+| `cascade: false`（デフォルト） | `AreaHasChildrenError` | 削除 |
+| `cascade: true` | 全子孫を再帰削除してから削除 | 削除 |
+
+**HistoryEntry / ChangeSet（cascade: false、葉エリアのみ）：**
+
+```
+HistoryEntry : { created: [], deleted: [area（スナップショット）], modified: [祖先 {before,after} × N] }
+ChangeSet    : { created: [], deleted: [areaId], modified: [全祖先（after）] }
+```
+
+**HistoryEntry / ChangeSet（cascade: true）：**
+
+```
+HistoryEntry : {
+  created  : [],
+  deleted  : [area（スナップショット）, 全子孫（スナップショット）×N],
+  modified : [祖先 {before, after} × N]   // 親・祖先の geometry 再計算
+}
+ChangeSet : {
+  created  : [],
+  deleted  : [areaId, 全子孫のID × N],
+  modified : [全祖先（after）]
+}
+```
+
+undo 実行時は削除された全エリア（`HistoryEntry.deleted`）が一括で復元される。
 
 #### reparentArea の挙動
 
@@ -214,6 +359,19 @@ ChangeSet : {
 |----------|------|------|
 | `loadAreaToDraft(areaId)` | エリアID | 保存済み Area を DraftShape に変換して編集再開 |
 
+#### loadAreaToDraft の適用可否
+
+`loadAreaToDraft` は**直接編集可能なエリア**（明示的な子を持たないエリア）にのみ適用できる。
+
+| エリアの状態 | 適用可否 | 備考 |
+|------------|---------|------|
+| 最下層エリア（真の葉ノード） | ✅ 可 | geometry を直接所有。常に単一 Polygon |
+| 暗黙の中間ノード（非最下層・明示的子なし） | ✅ 可 | geometry = 最下層暗黙子と同形。常に単一 Polygon |
+| 明示的な中間ノード（明示的子あり） | ❌ `AreaHasChildrenError` | geometry は子の Union として自動計算。直接編集不可 |
+
+暗黙の中間ノードは最下層エリアと同一の geometry を持ち、常に単一の `Polygon` であるため、
+`DraftShape` への変換で `MultiPolygon` の問題は生じない。
+
 ### 表示名の編集
 
 | メソッド | 引数 | 説明 |
@@ -226,6 +384,23 @@ ChangeSet : {
 
 切断線は**ポリゴンの外側から引き、辺と交差させる**ことで操作を発動する。
 交差点では辺上に新しい頂点が自動挿入される。
+
+### ヒゲ（端部）の自動除去
+
+ユーザーはポリゴンの外側から描画を始め、外側で描画を終えることができる。
+ポリゴン境界の外側にある端部（ヒゲ）は、確定時にライブラリが自動的に除去する。
+
+```
+描画中:  外側 ─── I1 ─────────── I2 ─── 外側
+              ↑ヒゲ    実際の切断線    ヒゲ↑
+
+確定後:           I1 ─────────── I2
+                  （ヒゲは破棄される）
+```
+
+- I1, I2 はポリゴン境界との交差点（辺上に自動挿入）
+- ヒゲは DraftShape の `points` に含まれていてよい
+- 確定 API（`splitAsChildren` / `splitReplace`）呼び出し時に除去が行われる
 
 ### 交差数による挙動の決定ルール
 
@@ -307,14 +482,19 @@ after:
 ```
 splitAsChildren(
   parentAreaId : AreaID,
-  cutLine      : [Point]
+  draft        : DraftShape   // isClosed = false。ヒゲ込みで渡してよい
 ) → [Area]   // 生成された子エリアのリスト（2個以上）
               // 各 Area の id は自動生成、display_name は空
+              // level_key は parentAreaId の子レベルから自動推定
+              // 子レベルが存在しない場合は NoChildLevelError
+              //
+              // 対象が「暗黙の中間ノード」の場合：
+              //   暗黙の単一子が初めて明示的な2子に分割される（暗黙→明示への移行）
 ```
 
-#### 2-B：葉エリアを分割 → 元エリアを置き換え
+#### 2-B：直接編集可能なエリアを分割 → 元エリアを置き換え
 
-子エリア（または単独エリア）を分割した場合：
+明示的な子を持たないエリア（最下層エリア・暗黙の中間ノード）を分割した場合：
 - **元のポリゴンは削除される**
 - **2つの新ポリゴンが生成**され、元の `parent_id` を引き継ぐ
 
@@ -331,7 +511,7 @@ after:
 ```
 splitReplace(
   areaId  : AreaID,
-  cutLine : [Point]
+  draft   : DraftShape   // isClosed = false。ヒゲ込みで渡してよい
 ) → [Area]   // 生成されたエリアのリスト（元エリアは削除済み）
               // 各 Area の id は自動生成、display_name は空
 ```
@@ -393,6 +573,8 @@ carveInnerChild(
   // outer = 親からループを除いた残り（C字型など）
   // inner = ループ内側の新子
   // 両者の parent_id = parentAreaId、outer ∪ inner = 親
+  // level_key は parentAreaId の子レベルから自動推定
+  // 子レベルが存在しない場合は NoChildLevelError
 ```
 
 ### 純粋内側ループ → ドーナツ＋兄弟（バチカン型）
@@ -493,9 +675,9 @@ after:
 - 親ポリゴン = 旧親 ∪ 新子（拡張される）
 - **親保持の原則**に従い、親の形状は更新されるが親エリアの identity は保たれる
 
-### 子なし親への適用（昇格処理）
+### 暗黙の子のみを持つ親への適用
 
-親がまだ子を持たない葉ノードの場合、`expandWithChild` は以下のように動作する：
+親が暗黙の子のみを持つ状態（明示的な子を持たない非最下層エリア）の場合、`expandWithChild` は以下のように動作する：
 
 ```
 before:
@@ -523,6 +705,8 @@ expandWithChild(
   childName    : string
 ) → { parent: Area, child: Area }
   // 更新された親 + 新規子
+  // child の level_key は parentAreaId の子レベルから自動推定
+  // 子レベルが存在しない場合は NoChildLevelError
 ```
 
 ### 内側分割との対称性
@@ -683,6 +867,7 @@ geometry が変化する操作では、**更新された全祖先の `{before, a
 | `renameArea(area, name)` | — | — | [{before, after}] | なし（geometry 変化なし） |
 | `updateAreaGeometry(area, draft)` | — | — | [{before, after}] | 全祖先 |
 | `deleteArea(areaId)` | — | [area] | — | 全祖先 |
+| `deleteArea(areaId, {cascade:true})` | — | [area＋全子孫] | — | 全祖先 |
 | `reparentArea(areaId, newParentId?)` | — | — | [{before, after}] | 旧親・新親の全祖先 |
 | `mergeArea(areaId, otherAreaId)` | — | [otherArea] | [{before:areaId, after:merged}, 再配置された子×N] | なし（Union 保存） |
 
@@ -805,14 +990,116 @@ geometry が変化する操作では、**更新された全祖先** が `ChangeS
 | `renameArea(area, name)` | — | — | [area（after）] ※祖先更新なし |
 | `updateAreaGeometry(area, draft)` | — | — | [area（after）＋全祖先（after）] |
 | `deleteArea(areaId)` | — | [areaId] | [全祖先（after）] |
+| `deleteArea(areaId, {cascade:true})` | — | [areaId＋全子孫ID] | [全祖先（after）] |
 | `reparentArea(areaId, newParentId?)` | — | — | [area（after）＋旧親・新親の全祖先（after）] |
 | `mergeArea(areaId, otherAreaId)` | — | [otherAreaId] | [areaId（after）＋再配置された各子（after）] ※祖先更新なし |
 
 ---
 
+## エラー一覧
+
+### エラー型カタログ
+
+| エラー型 | 発生条件 | 主な発生 API |
+|---------|---------|------------|
+| `NotInitializedError` | `initialize()` 完了前に API を呼んだ | 全 API |
+| `InvalidAreaLevelConfigError` | `areaLevels` に循環参照・重複 key・存在しない `parent_level_key` がある | `initialize()` |
+| `DataIntegrityError` | `loadAll()` で読み込んだ Area に不整合がある（詳細は下記） | `initialize()` |
+| `StorageError` | `batchWrite` / `loadAll` の呼び出しが失敗した | `initialize()`、各編集 API |
+| `AreaNotFoundError` | 指定した `AreaID` が存在しない | 参照型 API 全般 |
+| `AreaLevelNotFoundError` | 指定した `level_key` が `areaLevels` に存在しない | `saveAsArea` |
+| `LevelMismatchError` | Area の level と親 Area の level の関係が `AreaLevel` 定義と不一致 | `saveAsArea`、`reparentArea`、`mergeArea` |
+| `AreaHasChildrenError` | 明示的な子を持つ Area を削除または直接編集しようとした | `deleteArea`、`loadAreaToDraft`、`updateAreaGeometry` |
+| `ParentWouldBeEmptyError` | `reparentArea` の結果、旧親の子が 0 件になる | `reparentArea` |
+| `CircularReferenceError` | `reparentArea` の結果、Area が自身の子孫を親に持つ循環が生じる | `reparentArea` |
+| `DraftNotClosedError` | `isClosed = false` の `DraftShape` を Area として保存しようとした | `saveAsArea`、`updateAreaGeometry` |
+| `InvalidGeometryError` | 自己交差・頂点数不足（3点未満）・面積ゼロなどの不正 geometry | `saveAsArea`、`updateAreaGeometry`、切断系 API |
+| `NoChildLevelError` | 操作対象エリアのレベルに子レベルが定義されていない（葉レベルへの子生成操作） | `splitAsChildren`、`expandWithChild`、`carveInnerChild` |
+
+### 各エラーの詳細
+
+#### `InvalidAreaLevelConfigError`
+
+`initialize()` 時に `areaLevels` を検証し、以下のいずれかに該当する場合に投げる：
+
+```
+- key が重複している
+- parent_level_key が存在しない key を指している
+- parent_level_key の参照を辿ると循環する（例: A→B→A）
+- 同じ parent_level_key を持つ AreaLevel が2つ以上存在する（線形階層制約違反）
+```
+
+#### `DataIntegrityError`
+
+`initialize()` 時に `loadAll()` で取得した Area を検証し、以下のいずれかに該当する場合に投げる：
+
+```
+- area.parent_id が指定されているが、その AreaID が存在しない
+- area.level_key が areaLevels に存在しない
+- area と parent の level_key が AreaLevel の親子関係と一致しない
+  （area.level.parent_level_key !== parent.level_key）
+```
+
+ストレージ側のデータが壊れている場合はアプリ側でリカバリを行う。ライブラリは自動修復しない。
+
+#### `LevelMismatchError`
+
+以下の状況で投げる：
+
+```
+// saveAsArea: parentId 指定あり
+area.level.parent_level_key  !=  parent.level_key
+
+// saveAsArea: parentId = null（ルートエリアとして作成）
+area.level.parent_level_key  !=  null
+
+// reparentArea: newParentId 指定あり
+area.level.parent_level_key  !=  newParent.level_key
+
+// reparentArea: newParentId = null（ルートエリアに昇格）
+area.level.parent_level_key  !=  null
+
+// mergeArea: 2エリアの level_key が異なる
+areaId.level_key  !=  otherAreaId.level_key
+```
+
+#### `CircularReferenceError`
+
+`reparentArea(areaId, newParentId)` 実行時に `newParentId` が `areaId` の子孫である場合に投げる。
+
+```
+// 例：A → B → C という親子関係のとき
+reparentArea(A, C)  →  CircularReferenceError
+// C を A の親にすると A→C→...→A という循環が生じる
+```
+
+#### `InvalidGeometryError`
+
+以下を不正 geometry と判定する：
+
+```
+- 頂点数が 3 未満（isClosed = true の場合）
+- 自己交差している（辺が他の辺と交差する）
+- 面積がゼロ（すべての頂点が1直線上にある）
+```
+
+> 切断系 API（`splitAsChildren`、`splitReplace` など）で切断線がポリゴンと交差しない場合は
+> エラーを投げず、変更なしの状態を返す（no-op）。
+
+### クエリ API の「見つからない」挙動
+
+編集 API（書き込み系）と異なり、クエリ API は `null` / 空配列を返す：
+
+| メソッド | 対象未存在時の戻り値 |
+|---------|------------------|
+| `getArea(id)` | `null` |
+| `getChildren(parentId)` | `[]`（空配列） |
+| `getAreasByLevel(levelKey)` | `[]`（空配列） |
+| `getAllAreaLevels()` | `[]`（ areaLevels が空の場合） |
+| `getAreaLevel(key)` | `null` |
+
+---
+
 ## 未決事項
 
-- [ ] スナッピング：近接する頂点や辺に自動吸着する機能
-- [ ] `deleteArea` のカスケード削除：子孫を再帰削除する `{ cascade: true }` オプションの要否
-- [ ] MultiPolygon の DraftShape 表現：飛び地を持つエリアを `loadAreaToDraft` した際の扱い
-- [ ] DraftShape バリデーション API：自己交差チェック・最小頂点数チェックの公開可否
+（現在なし）

@@ -47,6 +47,20 @@ AreaLevel {
 - `parent_level_key` によってレベル間の階層構造を木構造で定義する。数値の `rank` は持たない。
 - ライブラリ初期化時に、循環参照・存在しない `parent_level_key` がないかを検証する。
 
+#### 線形階層制約
+
+**各レベルは高々1つの子レベルを持つ。**
+
+```
+NG: city と ward の両方が parent_level_key: "prefecture" を持つ（同じ親レベルを複数の子レベルが指す）
+OK: 各レベルを指す parent_level_key は一意
+```
+
+この制約により、あるエリアレベルの「子レベル」は常に一意に決定できる。
+`splitAsChildren` / `expandWithChild` / `carveInnerChild` で生成される子エリアの `level_key` は自動推定される（呼び出し元が指定する必要はない）。
+
+`initialize()` 時に同じ `parent_level_key` を持つ AreaLevel が複数存在する場合は `InvalidAreaLevelConfigError` を投げる。
+
 #### 設定例
 
 ```
@@ -126,10 +140,12 @@ area.level の parent_level_key  ===  parent_area.level_key
 
 ### 不変条件（Invariant）
 
-**一度でも子を持ったエリア（中間ノード）は、子を0件にできない。**
+**非最下層エリアは、明示的・暗黙的を問わず常に少なくとも1つの子を持つ。**
 
-- `deleteArea`：子を持つエリアに対して呼ぶと `AreaHasChildrenError`
-- `reparentArea`：移動によって旧親の子が0件になる場合は `ParentWouldBeEmptyError`
+- 暗黙の子（後述）により、非最下層エリアは明示的な子がなくても最下層まで子を持つ。この性質は自動的に保証される。
+- `deleteArea`：明示的な子を持つエリアに対して呼ぶと `AreaHasChildrenError`
+  （`cascade: true` を指定した場合は全子孫を再帰削除）
+- `reparentArea`：移動によって旧親の明示的子が0件になる場合は `ParentWouldBeEmptyError`
 
 2つの兄弟エリアを1つにまとめたい場合は `mergeArea(areaId, otherAreaId)` を使う。
 `mergeArea` は `otherAreaId` を `areaId` に吸収合体させ、子も引き継ぐため不変条件は維持される。
@@ -141,6 +157,51 @@ Area { id: "tokyo",    display_name: "東京都",     level_key: "prefecture", p
 Area { id: "shibuya",  display_name: "渋谷区",     level_key: "city",       parent_id: "tokyo" }
 Area { id: "shibuya1", display_name: "渋谷一丁目", level_key: "block",      parent_id: "shibuya" }
 ```
+
+### 暗黙の子（Implicit Children）
+
+> **非最下層エリアは、明示的な子を持たない場合でも、最下層まで暗黙の子を持つ。**
+
+暗黙の子とは：
+- 親 Area と**同一の geometry**（頂点を独立保持せず、親の頂点を参照する）
+- ストレージに別の Area レコードとして保存**されない**（仮想的な存在）
+- 「明示的な子が存在しない非最下層エリア」という条件からフラグ管理により導出される
+
+```
+例：country → prefecture → city → block の4階層構成
+
+  東京都（prefecture）を新規作成した時点で：
+    東京都.暗黙の city 子 × 1（東京都と同形）
+      └─ その暗黙 city の暗黙の block 子 × 1（同形）
+  → 最下層（block）まで暗黙の子が連鎖する
+```
+
+#### 葉ノードの再定義
+
+暗黙の子モデルにより、**「葉ノード」はすべて最下層（AreaLevel の末端レベル）に存在する**。
+
+| 状態 | 定義 |
+|------|------|
+| **真の葉ノード** | 最下層 AreaLevel のエリア。geometry を直接所有し、直接描画・直接編集が可能 |
+| **暗黙の中間ノード** | 非最下層かつ明示的な子を持たないエリア。geometry は最下層暗黙子と同形（頂点共有） |
+| **明示的な中間ノード** | 1つ以上の明示的な子 Area を持つエリア。geometry = 子の Union |
+
+最下層エリアには子レベルが存在しないため（`NoChildLevelError`）、
+子追加操作は適用できず、常に葉ノードのままである。
+
+#### 最下層エリアは常に単一 Polygon
+
+最下層エリアは直接描画または分割によってのみ生成されるため、
+その geometry は常に**単一の `Polygon`** である（`MultiPolygon` は生じない）。
+
+| 生成方法 | geometry |
+|---------|---------|
+| `saveAsArea`（直接描画） | DraftShape を閉じた単一 Polygon |
+| `splitReplace`（切断） | 1 Polygon を切断 → 複数の単一 Polygon |
+| `punchHole` | ドーナツ Polygon + 内側 Polygon（ともに単一 Polygon 型） |
+
+`MultiPolygon` は非最下層エリアが飛び地を持つ複数の明示的子を持つ場合のみ、
+Union 計算の結果として自動生成される。直接描画では生じない。
 
 ---
 
@@ -186,9 +247,9 @@ Area { id: "shibuya1", display_name: "渋谷一丁目", level_key: "block",     
 
 | 状況 | geometry の型 | 定義方法 |
 |------|--------------|---------|
-| 葉ノード（子を持たないエリア） | Polygon または MultiPolygon | 直接定義・直接編集 |
-| 中間ノード（子を持つエリア） | Polygon または MultiPolygon | 子 geometry の Union から自動計算 |
-| ルートノード（国など） | 同上 | 同上 |
+| 最下層エリア（真の葉ノード） | **Polygon**（単一のみ） | 直接描画・直接編集 |
+| 暗黙の中間ノード（非最下層・明示的子なし） | Polygon（最下層暗黙子と同形） | 最下層暗黙子から継承（頂点共有） |
+| 明示的な中間ノード（明示的子あり） | Polygon または MultiPolygon | 子 geometry の Union から自動計算 |
 
 ### 親 geometry の自動更新
 
@@ -230,13 +291,14 @@ ChangeSet.modified += [city_after, pref_after, country_after]
 
 undo 実行時に祖先の geometry も元に戻る。
 
-### 葉ノードから中間ノードへの昇格
+### 暗黙の子から明示的な子への移行
 
-子を持たない葉ノードに初めて子追加操作（`splitAsChildren` / `expandWithChild`）を行うと、
-そのノードは**中間ノードに昇格**する。
+暗黙の中間ノード（明示的な子を持たない非最下層エリア）に対して初めて子追加操作
+（`splitAsChildren` / `expandWithChild`）を行うと、そのエリアは
+**明示的な子を持つ中間ノードへ移行**する。
 
-- 元の geometry は**子1として新規 Area に移譲**される
-- 親自身の geometry は以降、子の Union として管理される
+- 元の geometry は**子1として新規 Area に移譲**される（暗黙の単一子が明示的エリアとして具現化）
+- 親自身の geometry は以降、明示的子の Union として管理される
 - 親エリアの identity（id・display_name・level_key・parent_id 等）はそのまま保たれる
 
 ### 境界の共有
@@ -299,4 +361,4 @@ getAreaLevel(key: string) → AreaLevel | null
 
 ## 未決事項
 
-- [ ] 既存の行政区画データ（GeoJSON）のインポート仕様
+（現在なし）
