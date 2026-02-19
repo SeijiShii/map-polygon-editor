@@ -1,5 +1,29 @@
 # ポリゴン編集 API 仕様
 
+## 初期化
+
+```
+MapPolygonEditor(config: {
+  storageAdapter : StorageAdapter
+  areaLevels     : [AreaLevel]   // エリアレベル定義（静的設定）
+  maxUndoSteps?  : number        // デフォルト: 100
+  epsilon?       : number        // デフォルト: 1e-8（共有頂点判定の許容誤差、単位：度）
+})
+
+initialize(): Promise<void>
+```
+
+`initialize()` を呼ぶと以下を実行する：
+
+1. `areaLevels` の整合性を検証（循環参照・存在しない `parent_level_key` がないか）
+2. `storageAdapter.loadAll()` を呼び出し、全 Area をメモリに展開する
+
+失敗した場合は例外を投げる（アプリ側でエラーハンドリングが必要）。
+
+`initialize()` 完了前にクエリ・編集 API を呼び出した場合は例外（`NotInitializedError`）を投げる。
+
+---
+
 ## 操作フロー
 
 ### ユースケース例：ある市全体を網羅するポリゴンを作る
@@ -74,12 +98,115 @@ Point {
 | `undo()` | - | 直前の操作を取り消す |
 | `redo()` | - | 取り消した操作をやり直す |
 
-### エリア保存
+### クエリ（全てインメモリ・同期）
+
+| メソッド | 引数 | 戻り値 | 説明 |
+|----------|------|--------|------|
+| `getArea(id)` | AreaID | `Area \| null` | ID で Area を取得 |
+| `getChildren(parentId)` | AreaID | `[Area]` | 直接の子 Area を全て取得 |
+| `getRoots()` | — | `[Area]` | `parent_id` が null の Area を全て取得 |
+| `getAllAreas()` | — | `[Area]` | 全 Area を取得 |
+| `getAreasByLevel(levelId)` | LevelID | `[Area]` | 指定レベルの Area を全て取得 |
+| `getAllAreaLevels()` | — | `[AreaLevel]` | 全 AreaLevel を取得 |
+
+### エリア保存・削除・移動
 
 | メソッド | 引数 | 説明 |
 |----------|------|------|
-| `saveAsArea(draft, name, levelId, parentId?)` | DraftShape、名称、レベルID、親ID | DraftShape を Area として保存 |
+| `saveAsArea(draft, name, levelKey, parentId?)` | DraftShape、名称、レベルキー、親ID | DraftShape を Area として保存。レベル整合性を検証 |
 | `updateAreaGeometry(areaId, draft)` | エリアID、DraftShape | 既存エリアの geometry を更新 |
+| `deleteArea(areaId)` | エリアID | 葉エリアを削除。子を持つ場合は `AreaHasChildrenError` |
+| `reparentArea(areaId, newParentId?)` | エリアID、新しい親ID（null = ルート化） | `parent_id` を変更する。レベル整合性を検証 |
+| `mergeArea(areaId, otherAreaId)` | 残すエリアID、吸収されるエリアID | 2つの兄弟エリアを1つに合体。`otherAreaId` の子を引き継ぎ削除 |
+
+#### deleteArea の HistoryEntry / ChangeSet
+
+```
+HistoryEntry : { created: [], deleted: [area（完全スナップショット）], modified: [] }
+ChangeSet    : { created: [], deleted: [areaId], modified: [] }
+```
+
+削除されたエリアの親 geometry キャッシュは再計算される（→「親 geometry キャッシュの再計算タイミング」参照）。
+
+#### reparentArea の挙動
+
+```
+reparentArea(
+  areaId      : AreaID,
+  newParentId : AreaID | null  // null = ルートエリアにする
+) → Area
+```
+
+**検証ルール：**
+
+```
+// newParentId が指定された場合
+areaId の level の parent_level_key  ===  newParent の level_key  →  LevelMismatchError
+
+// newParentId が null の場合
+areaId の level の parent_level_key  ===  null  →  LevelMismatchError（最上位レベルのみルート化可）
+
+// 旧親が子なしになる場合
+旧親の level_key に対する子レベルが存在する  →  ParentWouldBeEmptyError
+// 2つの兄弟エリアを1つにまとめたい場合は mergeArea を使う
+```
+
+**HistoryEntry / ChangeSet：**
+
+```
+HistoryEntry : { created: [], deleted: [], modified: [{ before: area（旧parent_id）, after: area（新parent_id）}] }
+ChangeSet    : { created: [], deleted: [], modified: [area（after）] }
+```
+
+旧親・新親の geometry キャッシュはともに再計算される。
+
+#### mergeArea の挙動
+
+```
+mergeArea(
+  areaId      : AreaID,   // 残るエリア（geometry を吸収する側）
+  otherAreaId : AreaID    // 削除されるエリア
+) → Area
+```
+
+**制約：**
+- 両エリアは同じ `parent_id` を持つ（兄弟エリア）
+- 両エリアは同じ `level_key` を持つ
+
+**結果：**
+- `areaId`.geometry = Union(areaId.geometry, otherAreaId.geometry)
+- `otherAreaId` の全ての子エリアは `areaId` の子に再配置される（parent_id を更新）
+- `otherAreaId` は削除される
+
+**親・祖先の geometry は変化しない：**
+
+```
+// マージ前: 親.geometry = Union(areaId, otherAreaId, 他の兄弟...)
+// マージ後: 親.geometry = Union(areaId_new, 他の兄弟...) = 同じ
+// areaId_new.geometry = areaId_old.geometry ∪ otherAreaId.geometry であるため
+```
+
+∴ mergeArea は祖先 geometry の再計算を引き起こさない。
+
+**HistoryEntry / ChangeSet：**
+
+```
+HistoryEntry : {
+  created  : [],
+  deleted  : [otherArea（スナップショット）],
+  modified : [
+    { before: areaId_before, after: areaId_after（合体後geometry） },
+    // 再配置された子 × N: { before: child（parent_id=otherId）, after: child（parent_id=areaId）}
+    // 祖先のgeometry変化なし → 含めない
+  ]
+}
+
+ChangeSet : {
+  created  : [],
+  deleted  : [otherAreaId],
+  modified : [areaId（after）, 再配置された各子（after）]  // 祖先は含めない
+}
+```
 
 ### エリア読み込み（編集再開）
 
@@ -542,17 +669,22 @@ HistoryEntry {
 
 #### 各操作の HistoryEntry
 
-| 操作 | created | deleted | modified |
-|------|---------|---------|---------|
-| `createArea` | [新Area] | — | — |
-| `splitAsChildren(parent, cut)` | [子1, 子2] | — | — |
-| `splitReplace(area, cut)` | [新1, 新2] | [元area] | — |
-| `carveInnerChild(parent, loop)` | [outer, inner] | — | — |
-| `punchHole(area, hole)` | [inner] | — | [{before:area, after:donut}] |
-| `expandWithChild(parent, path)` | [child] | — | [{before:parent, after:拡張parent}] |
-| `sharedEdgeMove(area, i, …)` | — | — | [影響を受けた全Area] |
-| `renameArea(area, name)` | — | — | [{before, after}] |
-| `updateAreaGeometry(area, draft)` | — | — | [{before, after}] |
+geometry が変化する操作では、**更新された全祖先の `{before, after}`** が `modified` に自動追加される。
+
+| 操作 | created | deleted | modified（直接操作対象） | 自動追加（祖先） |
+|------|---------|---------|------------------------|----------------|
+| `saveAsArea` | [新Area] | — | — | 全祖先 |
+| `splitAsChildren(parent, cut)` | [子1, 子2] | — | — | 全祖先（parentより上） |
+| `splitReplace(area, cut)` | [新1, 新2] | [元area] | — | 全祖先 |
+| `carveInnerChild(parent, loop)` | [outer, inner] | — | — | 全祖先（parentより上） |
+| `punchHole(area, hole)` | [inner] | — | [{before:area, after:donut}] | 全祖先 |
+| `expandWithChild(parent, path)` | [child] | — | [{before:parent, after:拡張parent}] | 全祖先（parentより上） |
+| `sharedEdgeMove(area, i, …)` | — | — | [影響を受けた全兄弟Area] | 全祖先 |
+| `renameArea(area, name)` | — | — | [{before, after}] | なし（geometry 変化なし） |
+| `updateAreaGeometry(area, draft)` | — | — | [{before, after}] | 全祖先 |
+| `deleteArea(areaId)` | — | [area] | — | 全祖先 |
+| `reparentArea(areaId, newParentId?)` | — | — | [{before, after}] | 旧親・新親の全祖先 |
+| `mergeArea(areaId, otherAreaId)` | — | [otherArea] | [{before:areaId, after:merged}, 再配置された子×N] | なし（Union 保存） |
 
 #### Undo / Redo スタック
 
@@ -615,16 +747,18 @@ canRedo()  → bool
 
 ### StorageAdapter インターフェース
 
+AreaLevel は静的な config としてアプリ側が管理するため、StorageAdapter は **Area データのみを扱う**。
+
 ```
 interface StorageAdapter {
-  loadAll(): Promise<{ areas: Area[], areaLevels: AreaLevel[] }>
+  loadAll(): Promise<{ areas: Area[] }>
   batchWrite(changes: ChangeSet): Promise<void>
 }
 
 ChangeSet {
-  created  : [Area]      // 新規作成された Area
-  deleted  : [AreaID]    // 削除された Area の ID のみ
-  modified : [Area]      // 変更後の Area（after のみ、before は含まない）
+  created  : [Area]       // 新規作成された Area
+  deleted  : [AreaID]     // 削除された Area の ID のみ
+  modified : [Area]       // 変更後の Area（after のみ、before は含まない）
 }
 ```
 
@@ -657,21 +791,28 @@ ChangeSet {
 ### ChangeSet の組み立て
 
 各 API は HistoryEntry と同時に ChangeSet も組み立て、`batchWrite` に渡す。
+geometry が変化する操作では、**更新された全祖先** が `ChangeSet.modified` に自動追加される。
 
-| 操作 | ChangeSet.created | ChangeSet.deleted | ChangeSet.modified |
-|------|-----------------|-----------------|------------------|
-| `saveAsArea` | [新Area] | — | — |
-| `splitAsChildren(parent, cut)` | [子1, 子2] | — | — |
-| `splitReplace(area, cut)` | [新1, 新2] | [元area.id] | — |
-| `carveInnerChild(parent, loop)` | [outer, inner] | — | — |
-| `punchHole(area, hole)` | [inner] | — | [donut（after）] |
-| `expandWithChild(parent, path)` | [child] | — | [拡張parent（after）] |
-| `sharedEdgeMove(area, i, …)` | — | — | [影響を受けた全Area（after）] |
-| `renameArea(area, name)` | — | — | [area（after）] |
-| `updateAreaGeometry(area, draft)` | — | — | [area（after）] |
+| 操作 | ChangeSet.created | ChangeSet.deleted | ChangeSet.modified（直接＋祖先） |
+|------|-----------------|-----------------|--------------------------------|
+| `saveAsArea` | [新Area] | — | [全祖先（after）] |
+| `splitAsChildren(parent, cut)` | [子1, 子2] | — | [parentより上の全祖先（after）] |
+| `splitReplace(area, cut)` | [新1, 新2] | [元area.id] | [全祖先（after）] |
+| `carveInnerChild(parent, loop)` | [outer, inner] | — | [parentより上の全祖先（after）] |
+| `punchHole(area, hole)` | [inner] | — | [donut（after）＋全祖先（after）] |
+| `expandWithChild(parent, path)` | [child] | — | [拡張parent（after）＋parentより上の全祖先（after）] |
+| `sharedEdgeMove(area, i, …)` | — | — | [影響を受けた全兄弟Area（after）＋全祖先（after）] |
+| `renameArea(area, name)` | — | — | [area（after）] ※祖先更新なし |
+| `updateAreaGeometry(area, draft)` | — | — | [area（after）＋全祖先（after）] |
+| `deleteArea(areaId)` | — | [areaId] | [全祖先（after）] |
+| `reparentArea(areaId, newParentId?)` | — | — | [area（after）＋旧親・新親の全祖先（after）] |
+| `mergeArea(areaId, otherAreaId)` | — | [otherAreaId] | [areaId（after）＋再配置された各子（after）] ※祖先更新なし |
 
 ---
 
 ## 未決事項
 
 - [ ] スナッピング：近接する頂点や辺に自動吸着する機能
+- [ ] `deleteArea` のカスケード削除：子孫を再帰削除する `{ cascade: true }` オプションの要否
+- [ ] MultiPolygon の DraftShape 表現：飛び地を持つエリアを `loadAreaToDraft` した際の扱い
+- [ ] DraftShape バリデーション API：自己交差チェック・最小頂点数チェックの公開可否
