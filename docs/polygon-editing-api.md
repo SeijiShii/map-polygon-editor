@@ -596,6 +596,82 @@ canRedo()  → bool
 
 ---
 
+## ストレージ抽象化（Storage Layer）
+
+データの永続化・読み込みはライブラリ内に実装せず、**外部の `StorageAdapter` に委譲する**。
+ライブラリはインメモリで全データを保持し、変更発生時に `StorageAdapter` を呼び出す。
+
+### 設計方針
+
+| 方針 | 内容 |
+|------|------|
+| **全件インメモリロード** | 起動時に `loadAll()` で全 Area・AreaLevel を取得してメモリに展開する |
+| **バッチ書き込み** | 操作ごとに `batchWrite(ChangeSet)` を呼び出す（1操作 = 1回の呼び出し） |
+| **メモリ内クエリ** | `findByParentId` 等の検索はメモリ内で完結。ストレージへのクエリは不要 |
+| **楽観的書き込み** | メモリを先に更新し、`batchWrite` 失敗時はエラーを呼び出し元に伝播する |
+
+**全件インメモリロード採用の根拠：** 対象規模は最大数千ポリゴン。この規模ではインメモリロードが
+パフォーマンス上問題なく、実装をシンプルに保てる。
+
+### StorageAdapter インターフェース
+
+```
+interface StorageAdapter {
+  loadAll(): Promise<{ areas: Area[], areaLevels: AreaLevel[] }>
+  batchWrite(changes: ChangeSet): Promise<void>
+}
+
+ChangeSet {
+  created  : [Area]      // 新規作成された Area
+  deleted  : [AreaID]    // 削除された Area の ID のみ
+  modified : [Area]      // 変更後の Area（after のみ、before は含まない）
+}
+```
+
+#### HistoryEntry との違い
+
+| フィールド | HistoryEntry（undo 用） | ChangeSet（storage 用） |
+|-----------|------------------------|------------------------|
+| `deleted` | `[Area]`（完全スナップショット） | `[AreaID]`（ID のみ） |
+| `modified` | `[{ before, after }]` | `[Area]`（after のみ） |
+
+ストレージ側は before を必要としないため、転送データ量を最小化する。
+
+### 楽観的書き込み失敗時の動作
+
+```
+1. API 操作（例：splitAsChildren）をメモリに適用
+2. HistoryEntry を UndoStack に積む
+3. batchWrite(ChangeSet) を非同期で呼び出す
+4. 成功 → 何もしない
+5. 失敗 → エラーを呼び出し元に伝播する
+           ライブラリ内メモリは更新済みのまま（自動ロールバックなし）
+           呼び出し元が必要に応じて undo() を呼ぶ選択肢を持つ
+```
+
+**ロールバックを自動化しない理由：**
+- undo() は HistoryEntry ベースで整合性を保つ既存の仕組みを再利用できる
+- 自動ロールバック実装はエラーケースの複雑さを倍増させる
+- 呼び出し元（アプリ側）が UI フロー込みで対処方針を決定するほうが適切
+
+### ChangeSet の組み立て
+
+各 API は HistoryEntry と同時に ChangeSet も組み立て、`batchWrite` に渡す。
+
+| 操作 | ChangeSet.created | ChangeSet.deleted | ChangeSet.modified |
+|------|-----------------|-----------------|------------------|
+| `saveAsArea` | [新Area] | — | — |
+| `splitAsChildren(parent, cut)` | [子1, 子2] | — | — |
+| `splitReplace(area, cut)` | [新1, 新2] | [元area.id] | — |
+| `carveInnerChild(parent, loop)` | [outer, inner] | — | — |
+| `punchHole(area, hole)` | [inner] | — | [donut（after）] |
+| `expandWithChild(parent, path)` | [child] | — | [拡張parent（after）] |
+| `sharedEdgeMove(area, i, …)` | — | — | [影響を受けた全Area（after）] |
+| `renameArea(area, name)` | — | — | [area（after）] |
+| `updateAreaGeometry(area, draft)` | — | — | [area（after）] |
+
+---
+
 ## 未決事項
 
 - [ ] スナッピング：近接する頂点や辺に自動吸着する機能
