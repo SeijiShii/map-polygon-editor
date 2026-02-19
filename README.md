@@ -1,6 +1,9 @@
 # map-polygon-editor
 
-複数の地図プロバイダーを横断して抽象化し、地図上でポリゴンの追加・編集を行うライブラリ。
+地図上のポリゴン編集に特化した**データ管理ライブラリ**。
+
+エリアの階層管理・ジオメトリ演算・undo/redo・ストレージ抽象化を担う。
+地図の描画・入力処理はアプリ側に委譲する設計で、Google Maps・Leaflet・flutter_map など任意の地図ライブラリと組み合わせて使用できる。
 
 ## 主なユースケース
 
@@ -26,11 +29,23 @@
 | [エリアレベル仕様](docs/polygon-area-levels.md) | エリア階層・データ設計・親子関係・親ポリゴン導出ルール |
 | [ポリゴン編集 API](docs/polygon-editing-api.md) | 全 API 仕様・操作パターン・Undo/Redo・ストレージ抽象化 |
 
-## 対応地図プロバイダー（予定）
+## アーキテクチャ
 
-- Google Maps API
-- OpenStreetMap（Leaflet / MapLibre 経由）
-- 国土地理院地図（XYZ タイル形式）
+このライブラリは地図描画を行わない。GeoJSON の入出力インターフェースを通じて任意の地図ライブラリと連携する。
+
+```
+┌─────────────────────────────────┐
+│        map-polygon-editor        │
+│                                  │
+│  Area管理 / undo/redo / storage  │
+│  geometry演算 / 共有境界連動     │
+└──────────────┬───────────────────┘
+               │ GeoJSON の入出力のみ
+   ┌───────────┼────────────┐
+   ↓           ↓            ↓
+Terra Draw  flutter_map  Google Maps
+（Web）      （Flutter）  （JS/Flutter）
+```
 
 ## ステータス
 
