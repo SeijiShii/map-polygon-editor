@@ -16,7 +16,7 @@
 | ビルドターゲット | ESM / CJS 両対応（tsup 予定） |
 | テスト | Vitest |
 | カバレッジ | v8（閾値 80%） |
-| ジオメトリ演算 | 未導入（@turf/turf 予定） |
+| ジオメトリ演算 | @turf/turf（導入済み）|
 
 ---
 
@@ -24,19 +24,19 @@
 
 ```
 Test Files  8 passed (8)
-     Tests  361 passed (361)
+     Tests  478 passed (478)
 
 File                  | % Stmts | % Branch | % Funcs | % Lines
 ----------------------|---------|----------|---------|--------
-editor.ts             |   99.49 |   96.63  |   100   |   99.49
+editor.ts             |   96.08 |   91.53  |   100   |   96.08
 errors.ts             |   100   |   100    |   100   |   100
 area-level-store.ts   |   100   |   100    |   100   |   100
 area-level-validator  |   100   |   100    |   100   |   100
-area-store.ts         |   100   |   91.37  |   100   |   100
+area-store.ts         |   100   |   91.22  |   100   |   100
 draft-operations.ts   |   100   |   100    |   100   |   100
 draft-store.ts        |   100   |   100    |   100   |   100
 validate-draft.ts     |   100   |   100    |   100   |   100
-All files             |   99.77 |   96.86  |   100   |   99.77
+All files             |   97.09 |   93.41  |   100   |   97.09
 ```
 
 ---
@@ -215,8 +215,19 @@ initialize(): Promise<void>
 | `loadAreaToDraft(areaId)` | Area → open DraftShape（子ありは AreaHasChildrenError）|
 | `saveAsArea(draft, name, levelKey, parentId?)` | DraftShape → Area 保存、レベル整合性検証、祖先 geometry 自動更新 |
 | `deleteArea(areaId, options?)` | 削除（cascade: true で子孫も再帰削除）|
+| `bulkCreate(items)` | AreaInput[] から一括作成、ID 自動採番、fail-fast バリデーション |
+| `updateAreaGeometry(areaId, draft)` | geometry 更新（明示的子ありは AreaHasChildrenError）、祖先 geometry 伝播 |
+| `reparentArea(areaId, newParentId)` | 親変更、LevelMismatch / ParentWouldBeEmpty / CircularReference 検証 |
+| `mergeArea(areaId, otherAreaId)` | 兄弟2件を統合、geometry マージ（Polygon/MultiPolygon 両対応）|
+| `splitAsChildren(areaId, draft)` | 切断線（open DraftShape）で子エリアに分割、ヒゲ除去付き |
+| `splitReplace(areaId, draft)` | 切断線でエリアを兄弟2件に置き換え、元エリア削除 |
+| `carveInnerChild(areaId, points)` | 内側ポリゴンで子2件（外枠・内側）を生成 |
+| `punchHole(areaId, points)` | 内側ポリゴンで穴あき geometry を作成（difference 演算）|
+| `expandWithChild(parentAreaId, points)` | 外側ポリゴンで子2件生成、親 geometry を拡張 |
+| `sharedEdgeMove(areaId, index, lat, lng)` | 共有頂点を全兄弟エリアに伝播して移動 |
 
 祖先 geometry 更新：子の geometry を MultiPolygon として Union し、親→祖父→... と伝播
+ポリゴン演算：@turf/turf（`lineSplit`, `difference`, `union`, `booleanValid`）を使用
 
 **フェーズ5 — Undo/Redo**
 
@@ -230,33 +241,13 @@ initialize(): Promise<void>
 - UndoStack / RedoStack（`maxUndoSteps` 上限あり、デフォルト 100）
 - 新規操作時に RedoStack をクリア
 
-テスト：**113件 / カバレッジ 96.63%（branch）**
+テスト：**230件 / カバレッジ 91.53%（branch）**
 
 ---
 
-## 未実装 API（実装予定順）
+## 未実装 API
 
-### 次フェーズ：残りの編集 API
-
-| API | 概要 | 難易度 |
-|-----|------|--------|
-| `bulkCreate(items)` | AreaInput[] から一括作成、ID 自動採番 | 低 |
-| `updateAreaGeometry(areaId, draft)` | geometry 更新（子ありは不可）| 低 |
-| `reparentArea(areaId, newParentId)` | 親変更、LevelMismatch / ParentWouldBeEmpty 検証 | 中 |
-| `mergeArea(areaId, otherAreaId)` | 2つのエリアを1つに統合 | 中 |
-
-### 切断・形状操作 API（将来フェーズ）
-
-| API | 概要 | 難易度 |
-|-----|------|--------|
-| `splitAsChildren(areaId, draft)` | 切断線で子に分割（Turf.js 必要）| 高 |
-| `splitReplace(areaId, draft)` | 切断線で兄弟2件に置き換え | 高 |
-| `carveInnerChild(areaId, points)` | 内側ループで子を切り出し | 高 |
-| `punchHole(areaId, points)` | 内側ループで穴を開ける | 高 |
-| `expandWithChild(parentAreaId, points)` | 外側ループで子を追加 | 高 |
-| `sharedEdgeMove(areaId, index, lat, lng)` | 共有辺の頂点移動 | 高 |
-
-切断系 API は正確なポリゴン演算（クリッピング）が必要なため、**@turf/turf の導入後**に実装する。
+現在、仕様に定義された全 API が実装済みです。
 
 ---
 
@@ -268,3 +259,5 @@ initialize(): Promise<void>
 | 2026-02-20 | 仕様変更：ドラフト永続化（PersistedDraft, StorageAdapter 拡張）|
 | 2026-02-20 | DraftShape 操作・validateDraft・DraftStore 実装（172テスト）|
 | 2026-02-20 | errors.ts（14エラークラス）+ MapPolygonEditor 全5フェーズ実装（361テスト）|
+| 2026-02-20 | bulkCreate / updateAreaGeometry / reparentArea / mergeArea 実装（424テスト）|
+| 2026-02-20 | @turf/turf 導入、切断・形状操作 API 全6件実装（478テスト）|
