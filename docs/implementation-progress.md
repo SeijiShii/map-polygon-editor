@@ -32,6 +32,9 @@
 | `Area` | `id`, `display_name`, `level_key`, `parent_id`, `geometry`, `metadata`, `created_at`, `updated_at`, `is_implicit` |
 | `Point` | `{ lat, lng }` |
 | `DraftShape` | `{ points: Point[], isClosed: boolean }` |
+| `DraftID` | Branded string（PersistedDraft の ID）|
+| `PersistedDraft` | `id`, `points`, `isClosed`, `created_at`, `updated_at`, `metadata?` |
+| `StorageAdapter` | `loadAll()`, `batchWrite()`, `saveDraft()`, `deleteDraft()` |
 | `AreaInput` | `bulkCreate` 用入力型（id なし）|
 | `ChangeSet` | StorageAdapter へ渡す書き込みデルタ |
 | `HistoryEntry` | undo/redo 用の変更履歴エントリ |
@@ -81,58 +84,83 @@
 
 テスト：**38件 / カバレッジ 90.9%（branch）**
 
+### `src/draft/draft-operations.ts`
+
+純粋関数群（すべてイミュータブル）
+
+| 関数 | 説明 |
+|------|------|
+| `createDraft()` | 空の DraftShape を作成 |
+| `addPoint(draft, point)` | 末尾に点を追加 |
+| `insertPoint(draft, index, point)` | 任意位置に点を挿入 |
+| `movePoint(draft, index, point)` | 指定インデックスの点を移動 |
+| `removePoint(draft, index)` | 指定インデックスの点を削除 |
+| `closeDraft(draft)` | `isClosed = true` |
+| `openDraft(draft)` | `isClosed = false` |
+| `draftToGeoJSON(draft)` | GeoJSON Polygon に変換（CCW 正規化・Shoelace 法）|
+
+テスト：**42件 / カバレッジ 100%**
+
+### `src/draft/validate-draft.ts`
+
+`validateDraft(draft: DraftShape): GeometryViolation[]`
+
+| コード | 条件 | closed のみ |
+|--------|------|------------|
+| `TOO_FEW_VERTICES` | closed: 3点未満 / open: 2点未満 | — |
+| `SELF_INTERSECTION` | 非隣接辺の交差（外積符号法） | ✓ |
+| `ZERO_AREA` | Shoelace 面積 < 1e-14 | ✓ |
+
+テスト：**27件 / カバレッジ 100%**
+
+### `src/draft/draft-store.ts`
+
+`DraftStore` クラス（`Map<DraftID, PersistedDraft>` ベース、O(1) 参照）
+
+| メソッド | 説明 |
+|---------|------|
+| `getAll()` | 全 PersistedDraft 一覧 |
+| `get(id)` | ID で取得（なければ `null`）|
+| `save(draft)` | upsert（新規・更新どちらも）|
+| `delete(id)` | 削除（存在しない場合は no-op）|
+
+テスト：**29件 / カバレッジ 100%**
+
 ---
 
 ## テスト状況
 
 ```
-Test Files  3 passed (3)
-     Tests  74 passed (74)
+Test Files  6 passed (6)
+     Tests  172 passed (172)
 
-File                 | % Stmts | % Branch | % Funcs | % Lines
----------------------|---------|----------|---------|--------
-area-level-store.ts  |   100   |   100    |   100   |   100
-area-level-validator |   100   |   100    |   100   |   100
-area-store.ts        |   100   |   90.9   |   100   |   100
-All files            |   100   |   94.89  |   100   |   100
+File                  | % Stmts | % Branch | % Funcs | % Lines
+----------------------|---------|----------|---------|--------
+area-level-store.ts   |   100   |   100    |   100   |   100
+area-level-validator  |   100   |   100    |   100   |   100
+area-store.ts         |   100   |   90.9   |   100   |   100
+draft-operations.ts   |   100   |   100    |   100   |   100
+draft-store.ts        |   100   |   100    |   100   |   100
+validate-draft.ts     |   100   |   100    |   100   |   100
+All files             |   100   |   96.66  |   100   |   100
 ```
 
 ---
 
 ## 未実装モジュール（実装予定順）
 
-### 1. DraftShape 操作（`src/draft/`）
-
-| メソッド | 説明 |
-|---------|------|
-| `createDraft()` | 空の DraftShape を作成 |
-| `addPoint(draft, point)` | 末尾に点を追加 |
-| `insertPoint(draft, index, point)` | 任意位置に点を挿入 |
-| `movePoint(draft, index, point)` | 点を移動 |
-| `removePoint(draft, index)` | 点を削除 |
-| `closeDraft(draft)` | `isClosed = true` に |
-| `openDraft(draft)` | `isClosed = false` に |
-| `toGeoJSON(draft)` | GeoJSON Polygon に変換 |
-
-### 2. validateDraft（`src/draft/validate-draft.ts`）
-
-`validateDraft(draft: DraftShape): GeometryViolation[]`
-
-- `TOO_FEW_VERTICES`：closed=3点未満 / open=2点未満
-- `SELF_INTERSECTION`：辺の交差検出
-- `ZERO_AREA`：全頂点が一直線
-
-### 3. MapPolygonEditor ファサード（`src/editor.ts`）
+### 1. MapPolygonEditor ファサード（`src/editor.ts`）
 
 メインの公開クラス。以下の責務を持つ：
 
-- `initialize(config)` — `StorageAdapter.loadAll()` + バリデーション
+- `initialize(config)` — `StorageAdapter.loadAll()` で Area・PersistedDraft を読み込み
 - `NotInitializedError` ガード（`initialize()` 前に API 呼び出し不可）
 - 全クエリ API の委譲（`getArea`, `getChildren` 等）
 - `saveAsArea` / `updateAreaGeometry` / `deleteArea` / `bulkCreate`
 - undo/redo スタック管理
+- ドラフト永続化 API（`saveDraftToStorage`, `loadDraftFromStorage`, `listPersistedDrafts`, `deleteDraftFromStorage`）
 
-### 4. 編集 API
+### 2. 編集 API
 
 | API | 概要 |
 |-----|------|
@@ -144,7 +172,7 @@ All files            |   100   |   94.89  |   100   |   100
 | `reparentArea(areaId, newParentId)` | 親変更 |
 | `mergeArea(areaIds)` | 複数エリアを1つに統合 |
 
-### 5. 切断・形状操作 API
+### 3. 切断・形状操作 API
 
 | API | 概要 |
 |-----|------|
@@ -156,15 +184,6 @@ All files            |   100   |   94.89  |   100   |   100
 | `expandWithChild(parentAreaId, points)` | 外側ループで子を追加 |
 | `sharedEdgeMove(areaId, index, lat, lng)` | 共有辺の頂点移動 |
 
-### 6. StorageAdapter インターフェース
-
-```typescript
-interface StorageAdapter {
-  loadAll(): Promise<Area[]>
-  batchWrite(changeSet: ChangeSet): Promise<void>
-}
-```
-
 ---
 
 ## 変更履歴
@@ -172,3 +191,5 @@ interface StorageAdapter {
 | 日付 | 内容 |
 |------|------|
 | 2026-02-20 | 初期実装：types, AreaLevelStore, AreaLevelValidator, AreaStore（74テスト、94.89%カバレッジ） |
+| 2026-02-20 | 仕様変更：ドラフト永続化（PersistedDraft, StorageAdapter 拡張, saveDraftToStorage 等）|
+| 2026-02-20 | DraftShape 操作・validateDraft・DraftStore 実装（172テスト、96.66%カバレッジ）|
