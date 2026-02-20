@@ -58,8 +58,8 @@ function hasZeroArea(points: Array<{ lat: number; lng: number }>): boolean {
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     // Use [lng, lat] as [x, y]
-    area += points[i].lng * points[j].lat;
-    area -= points[j].lng * points[i].lat;
+    area += points[i]!.lng * points[j]!.lat;
+    area -= points[j]!.lng * points[i]!.lat;
   }
 
   return Math.abs(area) < 1e-14;
@@ -89,10 +89,10 @@ function hasSelfIntersection(
       // Skip the wrap-around pair (last edge adjacent to first edge)
       if (i === 0 && j === edges.length - 1) continue;
 
-      const [a, b] = edges[i];
-      const [c, d] = edges[j];
+      const [a, b] = edges[i]!;
+      const [c, d] = edges[j]!;
 
-      if (segmentsIntersect(points[a], points[b], points[c], points[d])) {
+      if (segmentsIntersect(points[a]!, points[b]!, points[c]!, points[d]!)) {
         return true;
       }
     }

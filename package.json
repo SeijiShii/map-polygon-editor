@@ -3,16 +3,21 @@
   "version": "0.1.0",
   "description": "Data-layer library for map polygon editing with area hierarchies",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -20,6 +25,7 @@
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
     "@vitest/coverage-v8": "^2.0.0",
+    "tsup": "^8.5.1",
     "typescript": "^5.4.0",
     "vitest": "^2.0.0"
   },

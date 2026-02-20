@@ -25,7 +25,7 @@ export function addPoint(draft: DraftShape, point: Point): DraftShape {
 export function insertPoint(
   draft: DraftShape,
   index: number,
-  point: Point
+  point: Point,
 ): DraftShape {
   const next = [...draft.points];
   next.splice(index, 0, point);
@@ -36,7 +36,7 @@ export function insertPoint(
 export function movePoint(
   draft: DraftShape,
   index: number,
-  point: Point
+  point: Point,
 ): DraftShape {
   const next = [...draft.points];
   next[index] = point;
@@ -84,7 +84,7 @@ export function draftToGeoJSON(draft: DraftShape): GeoJSONPolygon {
   }
   if (draft.points.length < 3) {
     throw new Error(
-      `draftToGeoJSON: draft must have at least 3 points, got ${draft.points.length}`
+      `draftToGeoJSON: draft must have at least 3 points, got ${draft.points.length}`,
     );
   }
 
@@ -109,7 +109,8 @@ export function draftToGeoJSON(draft: DraftShape): GeoJSONPolygon {
   }
 
   // Close the ring: last coord = first coord
-  const closedRing = [...coords, coords[0]];
+  // coords is guaranteed non-empty (length >= 3 checked above)
+  const closedRing = [...coords, coords[0]!];
 
   return {
     type: "Polygon",
@@ -133,8 +134,10 @@ function signedArea(ring: number[][]): number {
   const n = ring.length;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    area += ring[i][0] * ring[j][1];
-    area -= ring[j][0] * ring[i][1];
+    const a = ring[i]!;
+    const b = ring[j]!;
+    area += a[0]! * b[1]!;
+    area -= b[0]! * a[1]!;
   }
   return area / 2;
 }

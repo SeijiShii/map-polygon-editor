@@ -34,7 +34,12 @@ import {
   NoChildLevelError,
 } from "./errors.js";
 import * as turf from "@turf/turf";
-import type { Feature, Polygon, MultiPolygon } from "geojson";
+import type {
+  Feature,
+  FeatureCollection,
+  Polygon,
+  MultiPolygon,
+} from "geojson";
 
 // Re-export the error class from its original location to avoid duplication
 export { InvalidAreaLevelConfigError } from "./errors.js";
@@ -1284,7 +1289,9 @@ export class MapPolygonEditor {
     const parentTurf = this.areaGeomToTurf(area.geometry);
     const holeTurf = turf.polygon([holeCoords]);
     const donutTurf = turf.difference(
-      turf.featureCollection([parentTurf, holeTurf]),
+      turf.featureCollection([parentTurf, holeTurf]) as FeatureCollection<
+        Polygon | MultiPolygon
+      >,
     );
 
     let donutGeom: Area["geometry"];
@@ -1387,7 +1394,9 @@ export class MapPolygonEditor {
     const parentTurf = this.areaGeomToTurf(area.geometry);
     const childTurf = turf.polygon([outerCoords]);
     const unionTurf = turf.union(
-      turf.featureCollection([parentTurf, childTurf]),
+      turf.featureCollection([parentTurf, childTurf]) as FeatureCollection<
+        Polygon | MultiPolygon
+      >,
     );
 
     let newParentGeom: Area["geometry"];
@@ -1532,20 +1541,12 @@ export class MapPolygonEditor {
    * Converts an area geometry to a turf Feature (Polygon or MultiPolygon).
    * Returns a plain GeoJSON Feature object to avoid turf type gymnastics.
    */
-  private areaGeomToTurf(geometry: Area["geometry"]): {
-    type: "Feature";
-    geometry: {
-      type: "Polygon" | "MultiPolygon";
-      coordinates: number[][][] | number[][][][];
-    };
-    properties: Record<string, never>;
-  } {
+  private areaGeomToTurf(
+    geometry: Area["geometry"],
+  ): Feature<Polygon | MultiPolygon> {
     return {
       type: "Feature" as const,
-      geometry: {
-        type: geometry.type,
-        coordinates: geometry.coordinates as number[][][] | number[][][][],
-      },
+      geometry: geometry as unknown as Polygon | MultiPolygon,
       properties: {},
     };
   }
