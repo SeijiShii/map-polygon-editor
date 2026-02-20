@@ -20,6 +20,27 @@
 
 ---
 
+## テスト状況（最終）
+
+```
+Test Files  8 passed (8)
+     Tests  361 passed (361)
+
+File                  | % Stmts | % Branch | % Funcs | % Lines
+----------------------|---------|----------|---------|--------
+editor.ts             |   99.49 |   96.63  |   100   |   99.49
+errors.ts             |   100   |   100    |   100   |   100
+area-level-store.ts   |   100   |   100    |   100   |   100
+area-level-validator  |   100   |   100    |   100   |   100
+area-store.ts         |   100   |   91.37  |   100   |   100
+draft-operations.ts   |   100   |   100    |   100   |   100
+draft-store.ts        |   100   |   100    |   100   |   100
+validate-draft.ts     |   100   |   100    |   100   |   100
+All files             |   99.77 |   96.86  |   100   |   99.77
+```
+
+---
+
 ## 実装済みモジュール
 
 ### `src/types/index.ts` — コア型定義
@@ -36,9 +57,32 @@
 | `PersistedDraft` | `id`, `points`, `isClosed`, `created_at`, `updated_at`, `metadata?` |
 | `StorageAdapter` | `loadAll()`, `batchWrite()`, `saveDraft()`, `deleteDraft()` |
 | `AreaInput` | `bulkCreate` 用入力型（id なし）|
-| `ChangeSet` | StorageAdapter へ渡す書き込みデルタ |
-| `HistoryEntry` | undo/redo 用の変更履歴エントリ |
-| `GeometryViolation` | `validateDraft` の戻り値（`TOO_FEW_VERTICES` / `SELF_INTERSECTION` / `ZERO_AREA`）|
+| `ChangeSet` | `{ created: Area[], deleted: AreaID[], modified: Area[] }` |
+| `HistoryEntry` | `{ created: Area[], deleted: Area[], modified: [{before,after}][] }` |
+| `GeometryViolation` | `{ code: "TOO_FEW_VERTICES" \| "SELF_INTERSECTION" \| "ZERO_AREA" }` |
+
+### `src/errors.ts` — エラークラス（14種）
+
+各クラスは `Error` を継承し、`Object.setPrototypeOf(this, new.target.prototype)` で `instanceof` を保証。
+
+| クラス | 発生条件 |
+|--------|---------|
+| `NotInitializedError` | `initialize()` 前に API を呼んだ |
+| `InvalidAreaLevelConfigError` | areaLevels に循環参照・重複 key 等 |
+| `DataIntegrityError` | `loadAll()` で読み込んだ Area に不整合 |
+| `StorageError` | `batchWrite` / `loadAll` の失敗 |
+| `AreaNotFoundError` | 指定 AreaID が存在しない |
+| `AreaLevelNotFoundError` | 指定 level_key が areaLevels に存在しない |
+| `LevelMismatchError` | Area の level と親 Area の level が不一致 |
+| `AreaHasChildrenError` | 明示的な子を持つ Area を直接編集 |
+| `ParentWouldBeEmptyError` | reparentArea の結果、旧親の明示的子が 0件に |
+| `CircularReferenceError` | reparentArea で循環が生じる |
+| `DraftNotClosedError` | open DraftShape を Area として保存しようとした |
+| `InvalidGeometryError` | 自己交差・頂点不足・面積ゼロ |
+| `NoChildLevelError` | 葉レベルへの子生成操作 |
+| `DraftNotFoundError` | loadDraftFromStorage で ID が見つからない |
+
+テスト：**76件 / カバレッジ 100%**
 
 ### `src/area-level/area-level-validator.ts`
 
@@ -82,7 +126,7 @@
 
 暗黙の子 ID の形式：`__implicit__<parentId>__<levelKey>`
 
-テスト：**38件 / カバレッジ 90.9%（branch）**
+テスト：**38件 / カバレッジ 91.37%（branch）**
 
 ### `src/draft/draft-operations.ts`
 
@@ -126,63 +170,93 @@
 
 テスト：**29件 / カバレッジ 100%**
 
----
+### `src/editor.ts` — MapPolygonEditor ファサード
 
-## テスト状況
+メインの公開クラス。全5フェーズ実装済み。
 
-```
-Test Files  6 passed (6)
-     Tests  172 passed (172)
+**フェーズ1 — 初期化・ガード**
 
-File                  | % Stmts | % Branch | % Funcs | % Lines
-----------------------|---------|----------|---------|--------
-area-level-store.ts   |   100   |   100    |   100   |   100
-area-level-validator  |   100   |   100    |   100   |   100
-area-store.ts         |   100   |   90.9   |   100   |   100
-draft-operations.ts   |   100   |   100    |   100   |   100
-draft-store.ts        |   100   |   100    |   100   |   100
-validate-draft.ts     |   100   |   100    |   100   |   100
-All files             |   100   |   96.66  |   100   |   100
+```typescript
+constructor({ storageAdapter, areaLevels, maxUndoSteps?, epsilon? })
+initialize(): Promise<void>
+// initialize() 前に呼ぶと NotInitializedError
 ```
 
+- `initialize()` で `validateAreaLevels()` → `storageAdapter.loadAll()` → AreaLevelStore + AreaStore + DraftStore 構築
+- 全メソッドに `NotInitializedError` ガード
+
+**フェーズ2 — クエリ API（同期）**
+
+| メソッド | 戻り値 |
+|---------|--------|
+| `getArea(id)` | `Area \| null` |
+| `getChildren(parentId)` | `Area[]` |
+| `getRoots()` | `Area[]` |
+| `getAllAreas()` | `Area[]` |
+| `getAreasByLevel(levelKey)` | `Area[]` |
+| `getAllAreaLevels()` | `AreaLevel[]` |
+| `getAreaLevel(key)` | `AreaLevel \| null` |
+| `validateDraft(draft)` | `GeometryViolation[]` |
+
+**フェーズ3 — ドラフト永続化 API**
+
+| メソッド | 説明 |
+|---------|------|
+| `saveDraftToStorage(draft, metadata?)` | 新規/更新保存 → `Promise<PersistedDraft>` |
+| `loadDraftFromStorage(id)` | DraftStore から DraftShape に変換（同期）|
+| `listPersistedDrafts()` | メモリ内一覧（同期）|
+| `deleteDraftFromStorage(id)` | 削除 → `Promise<void>` |
+
+**フェーズ4 — 編集 API**
+
+| メソッド | 説明 |
+|---------|------|
+| `renameArea(areaId, name)` | 名前変更、HistoryEntry + batchWrite |
+| `loadAreaToDraft(areaId)` | Area → open DraftShape（子ありは AreaHasChildrenError）|
+| `saveAsArea(draft, name, levelKey, parentId?)` | DraftShape → Area 保存、レベル整合性検証、祖先 geometry 自動更新 |
+| `deleteArea(areaId, options?)` | 削除（cascade: true で子孫も再帰削除）|
+
+祖先 geometry 更新：子の geometry を MultiPolygon として Union し、親→祖父→... と伝播
+
+**フェーズ5 — Undo/Redo**
+
+| メソッド | 説明 |
+|---------|------|
+| `undo()` | → `Area[]`（変更された全エリア）|
+| `redo()` | → `Area[]` |
+| `canUndo()` | → `boolean` |
+| `canRedo()` | → `boolean` |
+
+- UndoStack / RedoStack（`maxUndoSteps` 上限あり、デフォルト 100）
+- 新規操作時に RedoStack をクリア
+
+テスト：**113件 / カバレッジ 96.63%（branch）**
+
 ---
 
-## 未実装モジュール（実装予定順）
+## 未実装 API（実装予定順）
 
-### 1. MapPolygonEditor ファサード（`src/editor.ts`）
+### 次フェーズ：残りの編集 API
 
-メインの公開クラス。以下の責務を持つ：
+| API | 概要 | 難易度 |
+|-----|------|--------|
+| `bulkCreate(items)` | AreaInput[] から一括作成、ID 自動採番 | 低 |
+| `updateAreaGeometry(areaId, draft)` | geometry 更新（子ありは不可）| 低 |
+| `reparentArea(areaId, newParentId)` | 親変更、LevelMismatch / ParentWouldBeEmpty 検証 | 中 |
+| `mergeArea(areaId, otherAreaId)` | 2つのエリアを1つに統合 | 中 |
 
-- `initialize(config)` — `StorageAdapter.loadAll()` で Area・PersistedDraft を読み込み
-- `NotInitializedError` ガード（`initialize()` 前に API 呼び出し不可）
-- 全クエリ API の委譲（`getArea`, `getChildren` 等）
-- `saveAsArea` / `updateAreaGeometry` / `deleteArea` / `bulkCreate`
-- undo/redo スタック管理
-- ドラフト永続化 API（`saveDraftToStorage`, `loadDraftFromStorage`, `listPersistedDrafts`, `deleteDraftFromStorage`）
+### 切断・形状操作 API（将来フェーズ）
 
-### 2. 編集 API
+| API | 概要 | 難易度 |
+|-----|------|--------|
+| `splitAsChildren(areaId, draft)` | 切断線で子に分割（Turf.js 必要）| 高 |
+| `splitReplace(areaId, draft)` | 切断線で兄弟2件に置き換え | 高 |
+| `carveInnerChild(areaId, points)` | 内側ループで子を切り出し | 高 |
+| `punchHole(areaId, points)` | 内側ループで穴を開ける | 高 |
+| `expandWithChild(parentAreaId, points)` | 外側ループで子を追加 | 高 |
+| `sharedEdgeMove(areaId, index, lat, lng)` | 共有辺の頂点移動 | 高 |
 
-| API | 概要 |
-|-----|------|
-| `saveAsArea(draft, name, levelKey, parentId?)` | DraftShape → Area 変換・保存 |
-| `bulkCreate(items)` | 一括インポート |
-| `updateAreaGeometry(areaId, draft)` | geometry 更新（子あり不可）|
-| `deleteArea(areaId, options?)` | 削除（cascade オプション）|
-| `renameArea(areaId, name)` | 名前変更 |
-| `reparentArea(areaId, newParentId)` | 親変更 |
-| `mergeArea(areaIds)` | 複数エリアを1つに統合 |
-
-### 3. 切断・形状操作 API
-
-| API | 概要 |
-|-----|------|
-| `loadAreaToDraft(areaId)` | Area → DraftShape |
-| `splitAsChildren(areaId, draft)` | 切断線で子に分割 |
-| `splitReplace(areaId, draft)` | 切断線で兄弟2件に置き換え |
-| `carveInnerChild(areaId, points)` | 内側ループで子を切り出し |
-| `punchHole(areaId, points)` | 内側ループで穴を開ける |
-| `expandWithChild(parentAreaId, points)` | 外側ループで子を追加 |
-| `sharedEdgeMove(areaId, index, lat, lng)` | 共有辺の頂点移動 |
+切断系 API は正確なポリゴン演算（クリッピング）が必要なため、**@turf/turf の導入後**に実装する。
 
 ---
 
@@ -190,6 +264,7 @@ All files             |   100   |   96.66  |   100   |   100
 
 | 日付 | 内容 |
 |------|------|
-| 2026-02-20 | 初期実装：types, AreaLevelStore, AreaLevelValidator, AreaStore（74テスト、94.89%カバレッジ） |
-| 2026-02-20 | 仕様変更：ドラフト永続化（PersistedDraft, StorageAdapter 拡張, saveDraftToStorage 等）|
-| 2026-02-20 | DraftShape 操作・validateDraft・DraftStore 実装（172テスト、96.66%カバレッジ）|
+| 2026-02-20 | 初期実装：types, AreaLevelStore, AreaLevelValidator, AreaStore（74テスト）|
+| 2026-02-20 | 仕様変更：ドラフト永続化（PersistedDraft, StorageAdapter 拡張）|
+| 2026-02-20 | DraftShape 操作・validateDraft・DraftStore 実装（172テスト）|
+| 2026-02-20 | errors.ts（14エラークラス）+ MapPolygonEditor 全5フェーズ実装（361テスト）|
