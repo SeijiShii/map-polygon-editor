@@ -16,7 +16,7 @@ initialize(): Promise<void>
 `initialize()` を呼ぶと以下を実行する：
 
 1. `areaLevels` の整合性を検証（循環参照・存在しない `parent_level_key` がないか）
-2. `storageAdapter.loadAll()` を呼び出し、全 Area をメモリに展開する
+2. `storageAdapter.loadAll()` を呼び出し、全 Area と PersistedDraft をメモリに展開する
 
 失敗した場合は例外を投げる（アプリ側でエラーハンドリングが必要）。
 
@@ -81,10 +81,11 @@ Point {
 | `isClosed` | 用途 | 確定 API | 確定時の処理 |
 |-----------|------|---------|------------|
 | `true` | 閉じたポリゴン → エリアとして保存 | `saveAsArea()` | DraftShape を Area に変換して保存 |
-| `false` | 切断線 → 既存ポリゴンを分割 | `splitAsChildren()` / `splitReplace()` | ヒゲを自動除去してから分割実行 |
+| `false` | 切断線 → 既存ポリゴンを分割 | `splitAsChildren()` / `splitReplace()` | ヒゲを自動除去してから分割実行（ドラフト保存時はヒゲを保持したまま保存可） |
 
-DraftShape はいずれかの確定 API を呼ぶまで**インメモリのみ**に存在する。
-確定後は破棄される（ライブラリは保持しない）。
+DraftShape は確定 API を呼ぶまでインメモリで管理される。複雑な作業を中断・再開できるよう、
+明示的な API でストレージに保存することも可能（→ [ドラフト永続化](#ドラフト永続化-draft-persistence)）。
+確定後はメモリ・ストレージの両方から自動削除される。
 
 ### validateDraft
 
@@ -110,6 +111,55 @@ GeometryViolation {
 
 - `isClosed = false`（切断線）には面積・自己交差の概念がないためチェックしない
 - `saveAsArea` / `updateAreaGeometry` の内部でも同じチェックが走る（二重実装なし）
+
+### ドラフト永続化（Draft Persistence）
+
+作業中の DraftShape をストレージに保存し、後でリロード・再開できる仕組み。
+Area と同じ `StorageAdapter` に委譲する。
+
+#### PersistedDraft 型
+
+```
+DraftID : string  // ライブラリが自動生成するユニーク ID
+
+PersistedDraft {
+  id         : DraftID
+  points     : [Point]
+  isClosed   : bool
+  created_at : datetime
+  updated_at : datetime
+  metadata?  : { [key: string]: any }  // アプリ側が任意のラベル等を付与可
+}
+```
+
+- `is_implicit` は持たない（ドラフトは常に明示的なオブジェクト）
+- Area との紐付けは持たない（独立したドラフト）
+- `isClosed = false` のドラフト（切断線の途中状態）を保存可能。ヒゲがあっても保存できる
+- 確定 API（`saveAsArea` / `splitAsChildren` 等）の呼び出しが成功した際、
+  使用した PersistedDraft は**自動削除**される（ライブラリが `deleteDraft` を呼ぶ）
+
+#### ドラフト永続化 API
+
+```
+saveDraftToStorage(draft: DraftShape, metadata?: Record<string, any>)
+  → Promise<PersistedDraft>   // 保存後の PersistedDraft（id 付き）
+
+loadDraftFromStorage(id: DraftID) → DraftShape   // インメモリに展開
+
+listPersistedDrafts() → [PersistedDraft]          // 同期・全件返す
+
+deleteDraftFromStorage(id: DraftID) → Promise<void>
+```
+
+- `saveDraftToStorage` は同一ドラフトを複数回呼ぶと上書き保存（`id` が変わらない）
+  → 未保存の新規ドラフトを初回保存する際は新 `id` が採番される
+- `loadDraftFromStorage` はインメモリへの展開のみ行う（Storage への書き込みはしない）
+- `listPersistedDrafts` はメモリ内のリストを返す（`initialize()` で Storage から一括ロード済み）
+
+#### 保存時のヒゲについて
+
+`isClosed = false` のドラフト（切断線の作業途中）はヒゲを含んだ状態で保存できる。
+ヒゲ（折り返しや重複する線分）の除去は確定時（`splitAsChildren` / `splitReplace`）にのみ行われる。
 
 ### API の引数型：DraftShape vs [Point]
 
@@ -965,7 +1015,7 @@ canRedo()  → bool
 
 | 方針 | 内容 |
 |------|------|
-| **全件インメモリロード** | 起動時に `loadAll()` で全 Area・AreaLevel を取得してメモリに展開する |
+| **全件インメモリロード** | 起動時に `loadAll()` で全 Area・PersistedDraft を取得してメモリに展開する |
 | **バッチ書き込み** | 操作ごとに `batchWrite(ChangeSet)` を呼び出す（1操作 = 1回の呼び出し） |
 | **メモリ内クエリ** | `findByParentId` 等の検索はメモリ内で完結。ストレージへのクエリは不要 |
 | **楽観的書き込み** | メモリを先に更新し、`batchWrite` 失敗時はエラーを呼び出し元に伝播する |
@@ -975,12 +1025,14 @@ canRedo()  → bool
 
 ### StorageAdapter インターフェース
 
-AreaLevel は静的な config としてアプリ側が管理するため、StorageAdapter は **Area データのみを扱う**。
+AreaLevel は静的な config としてアプリ側が管理するため、StorageAdapter は **Area と PersistedDraft を扱う**。
 
 ```
 interface StorageAdapter {
-  loadAll(): Promise<{ areas: Area[] }>
+  loadAll(): Promise<{ areas: Area[], drafts: PersistedDraft[] }>
   batchWrite(changes: ChangeSet): Promise<void>
+  saveDraft(draft: PersistedDraft): Promise<void>
+  deleteDraft(id: DraftID): Promise<void>
 }
 
 ChangeSet {
@@ -989,6 +1041,10 @@ ChangeSet {
   modified : [Area]       // 変更後の Area（after のみ、before は含まない）
 }
 ```
+
+- `saveDraft` は新規保存・更新どちらにも使う（upsert）
+- `deleteDraft` はドラフト確定時にライブラリが自動呼び出しする（アプリ側で明示的に呼ぶことも可）
+- `loadAll()` はドラフトも一括ロードする（`initialize()` 内で呼ばれる）
 
 #### HistoryEntry との違い
 
