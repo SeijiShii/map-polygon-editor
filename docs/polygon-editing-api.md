@@ -111,6 +111,15 @@ GeometryViolation {
 - `isClosed = false`（切断線）には面積・自己交差の概念がないためチェックしない
 - `saveAsArea` / `updateAreaGeometry` の内部でも同じチェックが走る（二重実装なし）
 
+### API の引数型：DraftShape vs [Point]
+
+切断・描画系 API の引数型は操作の性質によって使い分けられている。
+
+| 引数型 | 使用 API | 理由 |
+|--------|---------|------|
+| `DraftShape` | `splitAsChildren`、`splitReplace` | ユーザーが対話的に描画する切断線。undo/redo・validateDraft が必要 |
+| `[Point]` | `carveInnerChild`、`punchHole`、`expandWithChild` | 閉じたループや境界起点のパス。DraftShape の open/close の概念が不要 |
+
 ### スナッピング（吸着）について
 
 スナッピング（近接する頂点・辺への自動吸着）は**ライブラリの責務外**とする。
@@ -151,12 +160,44 @@ draft.addPoint(snapped.lat, snapped.lng)
 
 | メソッド | 引数 | 戻り値 | 説明 |
 |----------|------|--------|------|
-| `getArea(id)` | AreaID | `Area \| null` | ID で Area を取得 |
-| `getChildren(parentId)` | AreaID | `[Area]` | 直接の子 Area を全て取得 |
+| `getArea(id)` | AreaID | `Area \| null` | ID で Area を取得（暗黙の子の仮想 ID も受け付ける） |
+| `getChildren(parentId)` | AreaID | `[Area]` | 直接の子 Area を全て取得。明示的子がない非最下層エリアは暗黙の子（`is_implicit: true`）を返す |
 | `getRoots()` | — | `[Area]` | `parent_id` が null の Area を全て取得 |
-| `getAllAreas()` | — | `[Area]` | 全 Area を取得 |
-| `getAreasByLevel(levelId)` | LevelID | `[Area]` | 指定レベルの Area を全て取得 |
+| `getAllAreas()` | — | `[Area]` | 全 **明示的** Area を取得（`is_implicit: true` の仮想エリアは含まない） |
+| `getAreasByLevel(levelId)` | LevelID | `[Area]` | 指定レベルの明示的 Area を全て取得 |
 | `getAllAreaLevels()` | — | `[AreaLevel]` | 全 AreaLevel を取得 |
+
+#### getChildren と暗黙の子
+
+```
+// 東京都（prefecture）が明示的な city 子を持たない場合
+getChildren("tokyo")
+→ [
+    Area {
+      id          : "__implicit__tokyo__city",  // 決定論的仮想 ID
+      level_key   : "city",
+      parent_id   : "tokyo",
+      geometry    : tokyo.geometry,             // 親と同一（参照）
+      display_name: "",
+      is_implicit : true
+    }
+  ]
+
+// 東京都が明示的な city 子（渋谷区など）を持つ場合
+getChildren("tokyo")
+→ [Area{渋谷区}, Area{新宿区}, ...]   // is_implicit: false の明示的子のみ
+```
+
+**暗黙の子 Area に対して適用できる操作：**
+
+| 操作 | 可否 | 備考 |
+|------|------|------|
+| `loadAreaToDraft(implicitId)` | ✅ | 親と同形の geometry を DraftShape に変換 |
+| `updateAreaGeometry(implicitId, draft)` | ✅ | 親（および祖先）の geometry を更新 |
+| `splitAsChildren(implicitId, draft)` | ✅ if 非最下層 | 暗黙→明示への移行 |
+| `splitReplace(implicitId, draft)` | ✅ | 親と同じ level で兄弟2件に置き換え |
+| `renameArea(implicitId, name)` | ❌ | 暗黙の子は display_name を持たない |
+| `deleteArea(implicitId)` | ❌ | ストレージに存在しない |
 
 ### エリア保存・削除・移動
 
@@ -286,13 +327,13 @@ reparentArea(
 
 ```
 // newParentId が指定された場合
-areaId の level の parent_level_key  ===  newParent の level_key  →  LevelMismatchError
+areaId の level の parent_level_key  !=  newParent の level_key  →  LevelMismatchError
 
 // newParentId が null の場合
-areaId の level の parent_level_key  ===  null  →  LevelMismatchError（最上位レベルのみルート化可）
+areaId の level の parent_level_key  !=  null  →  LevelMismatchError（最上位レベルのみルート化可）
 
-// 旧親が子なしになる場合
-旧親の level_key に対する子レベルが存在する  →  ParentWouldBeEmptyError
+// 旧親の明示的子が areaId の1件のみの場合（移動後に明示的子が0件になる）
+→  ParentWouldBeEmptyError
 // 2つの兄弟エリアを1つにまとめたい場合は mergeArea を使う
 ```
 
@@ -681,10 +722,10 @@ after:
 
 ```
 before:
-  親 ■■■■■■  （子なし・葉ノード）
+  親 ■■■■■■  （暗黙の子のみ・暗黙の中間ノード）
 
 after:
-  親 ■■■■■■┬──────┐  （子2つを持つ中間ノードに昇格）
+  親 ■■■■■■┬──────┐  （明示的な子2つを持つ中間ノードへ移行）
   子1 ■■■■■■│      │  ← 元の親の geometry がそのまま子1になる
   子2        │ ■■■■ │  ← 外側描画した新エリアが子2
              └──────┘
@@ -692,7 +733,7 @@ after:
 
 - **元の親の geometry → 子1** として新規 Area を生成（同じ `parent_id`）
 - **外側描画の新エリア → 子2** として新規 Area を生成
-- **親** は葉ノードから中間ノードに昇格し、geometry = 子1 ∪ 子2 に更新される
+- **親** は暗黙の中間ノードから明示的な中間ノードへ移行し、geometry = 子1 ∪ 子2 に更新される
 
 これにより「親 geometry = 全子の Union」という不変条件が常に保たれる。
 
@@ -765,6 +806,8 @@ sharedEdgeMove(
   lat     : float,
   lng     : float
 ) → [Area]  // 更新された全エリア（連動したエリアを含む）
+// 明示的な子を持つエリアには適用不可（AreaHasChildrenError）
+// 暗黙の子の仮想 ID でも呼び出し可能
 ```
 
 **処理フロー：**
@@ -1007,10 +1050,10 @@ geometry が変化する操作では、**更新された全祖先** が `ChangeS
 | `DataIntegrityError` | `loadAll()` で読み込んだ Area に不整合がある（詳細は下記） | `initialize()` |
 | `StorageError` | `batchWrite` / `loadAll` の呼び出しが失敗した | `initialize()`、各編集 API |
 | `AreaNotFoundError` | 指定した `AreaID` が存在しない | 参照型 API 全般 |
-| `AreaLevelNotFoundError` | 指定した `level_key` が `areaLevels` に存在しない | `saveAsArea` |
+| `AreaLevelNotFoundError` | 指定した `level_key` が `areaLevels` に存在しない | `saveAsArea`、`bulkCreate` |
 | `LevelMismatchError` | Area の level と親 Area の level の関係が `AreaLevel` 定義と不一致 | `saveAsArea`、`reparentArea`、`mergeArea` |
-| `AreaHasChildrenError` | 明示的な子を持つ Area を削除または直接編集しようとした | `deleteArea`、`loadAreaToDraft`、`updateAreaGeometry` |
-| `ParentWouldBeEmptyError` | `reparentArea` の結果、旧親の子が 0 件になる | `reparentArea` |
+| `AreaHasChildrenError` | 明示的な子を持つ Area を削除または直接編集しようとした | `deleteArea`、`loadAreaToDraft`、`updateAreaGeometry`、`sharedEdgeMove` |
+| `ParentWouldBeEmptyError` | `reparentArea` の結果、旧親の明示的子が 0 件になる | `reparentArea` |
 | `CircularReferenceError` | `reparentArea` の結果、Area が自身の子孫を親に持つ循環が生じる | `reparentArea` |
 | `DraftNotClosedError` | `isClosed = false` の `DraftShape` を Area として保存しようとした | `saveAsArea`、`updateAreaGeometry` |
 | `InvalidGeometryError` | 自己交差・頂点数不足（3点未満）・面積ゼロなどの不正 geometry | `saveAsArea`、`updateAreaGeometry`、切断系 API |

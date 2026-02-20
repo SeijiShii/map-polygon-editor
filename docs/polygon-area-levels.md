@@ -93,14 +93,18 @@ Area {
   metadata?     : { [key: string]: any }
   created_at    : datetime
   updated_at    : datetime
+  is_implicit   : bool              // true = 暗黙の子（仮想エリア、ストレージに保存されない）
 }
 ```
+
+`is_implicit: true` の Area はライブラリが仮想的に生成するオブジェクトであり、ストレージには保存されない。
+ID は `parent_id` と `level_key` から決定論的に生成される（同じ親・レベルであれば常に同じ ID）。
 
 #### ID の仕様
 
 - 生成時に自動付与されるハッシュ文字列（例：UUID v4）
 - **変更不可**。システム全体でエリアを一意に識別する
-- 外部データとの連携・インポート時も id は保持される
+- 外部データのインポート時も ID はライブラリが採番する（元データの ID は `metadata` に格納して保持する）
 
 #### display_name の仕様
 
