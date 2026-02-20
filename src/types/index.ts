@@ -1,6 +1,13 @@
 // AreaID — opaque string alias
 export type AreaID = string & { readonly __brand: "AreaID" };
 
+// DraftID — opaque string alias for persisted draft IDs
+export type DraftID = string & { readonly __brand: "DraftID" };
+
+export function makeDraftID(raw: string): DraftID {
+  return raw as DraftID;
+}
+
 export function makeAreaID(raw: string): AreaID {
   return raw as AreaID;
 }
@@ -82,4 +89,22 @@ export type GeometryViolationCode =
 
 export interface GeometryViolation {
   code: GeometryViolationCode;
+}
+
+// PersistedDraft — a DraftShape saved to storage
+export interface PersistedDraft {
+  id: DraftID;
+  points: Point[];
+  isClosed: boolean;
+  created_at: Date;
+  updated_at: Date;
+  metadata?: Record<string, unknown>;
+}
+
+// StorageAdapter — external persistence interface
+export interface StorageAdapter {
+  loadAll(): Promise<{ areas: Area[]; drafts: PersistedDraft[] }>;
+  batchWrite(changes: ChangeSet): Promise<void>;
+  saveDraft(draft: PersistedDraft): Promise<void>;
+  deleteDraft(id: DraftID): Promise<void>;
 }
