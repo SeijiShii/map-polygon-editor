@@ -1,4 +1,4 @@
-# map-polygon-editor 仕様書
+# map-polygon-editor 仕様書（v2）
 
 ## プロジェクト概要
 

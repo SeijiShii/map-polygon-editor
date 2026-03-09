@@ -8,41 +8,6 @@
 
 ---
 
-## !! 仕様変更（2026-03-09）!!
-
-### v2: ポリゴンデータ中心志向への移行
-
-**Area + AreaLevel モデルを廃止し、Polygon + Group モデルに移行する。**
-
-#### 廃止される概念
-
-- AreaLevel（エリアレベル定義）全体
-- Area（Polygon + Group に分離）
-- 暗黙の子（Implicit Children）
-- is_implicit フラグ
-- level_key / parent_level_key
-- 線形階層制約
-
-#### 新概念
-
-- **Polygon**: geometry を直接保有する葉ノード（旧 Area の最下層に相当）
-- **Group**: 子を束ねる論理コンテナ（geometry を保存しない）
-- 木構造（自由なネスト、レベル制約なし）
-- 空グループ不許可
-
-#### 実装への影響
-
-| モジュール | 影響 |
-|-----------|------|
-| `src/types/index.ts` | **大幅変更** — Area → Polygon + Group、AreaLevel 関連型削除、ChangeSet/HistoryEntry 再構成 |
-| `src/area-level/` | **全削除** — AreaLevelStore, AreaLevelValidator |
-| `src/area-store/` | **全削除** → `polygon-store/` + `group-store/` に分離 |
-| `src/errors.ts` | **大幅変更** — Level 系エラー削除、Group 系エラー追加 |
-| `src/editor.ts` | **大幅変更** — 全 API のシグネチャ変更 |
-| `src/draft/` | **軽微** — DraftShape 操作・validateDraft はそのまま維持 |
-
----
-
 ## 技術構成
 
 | 項目 | 採用技術 |
@@ -51,41 +16,52 @@
 | ビルドターゲット | ESM / CJS 両対応（tsup） |
 | テスト | Vitest |
 | カバレッジ | v8（閾値 80%） |
-| ジオメトリ演算 | @turf/turf |
+| ジオメトリ演算 | @turf/turf（未導入・ジオメトリ演算実装時に追加予定） |
 
 ---
 
-## v1 テスト状況（仕様変更前・参考）
+## テスト状況
 
 ```
 Test Files  8 passed (8)
-     Tests  478 passed (478)
+     Tests  267 passed (267)
+Coverage:   93.69% statements, 89.91% branches, 98.87% functions
 ```
-
-v2 移行に伴い、大部分のテストは書き直しが必要。
-DraftShape 関連テスト（draft-operations, validate-draft, draft-store）はそのまま流用可能。
 
 ---
 
 ## v2 実装状況
 
-### 流用可能（変更不要 or 軽微）
+### 完了
 
 | モジュール | テスト数 | 備考 |
 |-----------|---------|------|
-| `src/draft/draft-operations.ts` | 42 | そのまま流用 |
-| `src/draft/validate-draft.ts` | 27 | そのまま流用 |
-| `src/draft/draft-store.ts` | 29 | そのまま流用 |
+| `src/types/index.ts` | 14 | Polygon, Group, PolygonID, GroupID, ChangeSet, HistoryEntry 等 |
+| `src/errors.ts` | 71 | 13 エラークラス |
+| `src/polygon-store/` | 14 | PolygonStore（byId + byParent デュアルインデックス） |
+| `src/group-store/` | 13 | GroupStore（同上） |
+| `src/editor.ts` | 57 | MapPolygonEditor ファサード（初期化・クエリ・CRUD・グループ管理・Undo/Redo・ドラフト永続化） |
+| `src/draft/draft-operations.ts` | 42 | v1 から流用 |
+| `src/draft/validate-draft.ts` | 27 | v1 から流用 |
+| `src/draft/draft-store.ts` | 29 | v1 から流用 |
 
-### 新規実装が必要
+### 未実装（仕様策定済み）
 
-| モジュール | 状態 | 備考 |
-|-----------|------|------|
-| `src/types/index.ts` | 未着手 | Polygon, Group, PolygonID, GroupID, 新 ChangeSet/HistoryEntry |
-| `src/polygon-store/` | 未着手 | PolygonStore（旧 AreaStore から派生） |
-| `src/group-store/` | 未着手 | GroupStore（新規） |
-| `src/errors.ts` | 未着手 | エラー体系の再構成 |
-| `src/editor.ts` | 未着手 | MapPolygonEditor ファサード全面改修 |
+| 機能 | 備考 |
+|------|------|
+| `splitPolygon` | 切断線による分割。ルートポリゴンのみ |
+| `carveInnerPolygon` | ティアドロップ型ループによる切り出し |
+| `punchHole` | 内側ループによるドーナツ作成 |
+| `expandWithPolygon` | 外側描画によるポリゴン追加 + グループ化 |
+| `sharedEdgeMove` | 共有境界の連動頂点編集。座標ハッシュインデックス含む |
+| `getGroupPolygons` | グループ外周の Union 計算。@turf/turf 導入が必要 |
+
+### 削除済み（v1 モジュール）
+
+| モジュール | 備考 |
+|-----------|------|
+| `src/area-level/` | AreaLevelStore, AreaLevelValidator — AreaLevel 概念廃止 |
+| `src/area-store/` | AreaStore — Polygon+Group モデルに分離 |
 
 ---
 
@@ -95,3 +71,4 @@ DraftShape 関連テスト（draft-operations, validate-draft, draft-store）は
 |------|------|
 | 2026-02-20 | v1: 初期実装（478テスト） |
 | 2026-03-09 | v2 仕様策定: Area+AreaLevel → Polygon+Group モデルへの移行を決定 |
+| 2026-03-09 | v2 実装完了: 型・エラー・Store・Editor 全面書き換え（267テスト、カバレッジ93%） |

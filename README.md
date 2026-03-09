@@ -2,7 +2,7 @@
 
 地図上のポリゴン編集に特化した**データ管理ライブラリ**。
 
-エリアの階層管理・ジオメトリ演算・undo/redo・ストレージ抽象化を担う。
+ポリゴンのグループ管理・ジオメトリ演算・undo/redo・ストレージ抽象化を担う。
 地図の描画・入力処理はアプリ側に委譲する設計で、Google Maps・Leaflet・flutter_map など任意の地図ライブラリと組み合わせて使用できる。
 
 ## 主なユースケース
@@ -16,8 +16,8 @@
 ## 主な機能
 
 - **ポリゴン描画・編集**：頂点の追加・移動・削除、切断線による分割
-- **エリア階層管理**：国→都道府県→市区町村などの親子階層、Union による親形状の自動導出
-- **共有境界の連動編集**：隣接エリアの境界頂点を同時更新
+- **グループ管理**：ポリゴンやグループの木構造によるネスト管理
+- **共有境界の連動編集**：隣接ポリゴンの境界頂点を同時更新
 - **Undo / Redo**：ドラフト内・コミット済みの2レイヤー
 - **ストレージ抽象化**：`StorageAdapter` インターフェースによる永続化層の委譲
 
@@ -25,9 +25,10 @@
 
 | ドキュメント | 内容 |
 |------------|------|
-| [概要](docs/overview.md) | プロジェクト概要・技術選定 |
-| [エリアレベル仕様](docs/polygon-area-levels.md) | エリア階層・データ設計・親子関係・親ポリゴン導出ルール |
+| [概要](docs/overview.md) | プロジェクト概要・設計思想 |
+| [データモデル](docs/data-model.md) | Polygon・Group の型定義・木構造・制約 |
 | [ポリゴン編集 API](docs/polygon-editing-api.md) | 全 API 仕様・操作パターン・Undo/Redo・ストレージ抽象化 |
+| [v1→v2 移行ガイド](docs/migration-v1-to-v2.md) | Area+AreaLevel → Polygon+Group への移行対応表 |
 
 ## アーキテクチャ
 
@@ -37,7 +38,7 @@
 ┌─────────────────────────────────┐
 │        map-polygon-editor        │
 │                                  │
-│  Area管理 / undo/redo / storage  │
+│  Polygon/Group管理 / undo/redo   │
 │  geometry演算 / 共有境界連動     │
 └──────────────┬───────────────────┘
                │ GeoJSON の入出力のみ
@@ -49,4 +50,18 @@ Terra Draw  flutter_map  Google Maps
 
 ## ステータス
 
-仕様策定中。実装はまだ開始していない。
+v2 コア実装完了。267 テスト通過、カバレッジ 93%。
+
+### 実装済み
+
+- 型システム（PolygonID / GroupID / DraftID ブランド型）
+- PolygonStore / GroupStore（デュアルインデックス）
+- MapPolygonEditor ファサード（初期化・クエリ・CRUD・グループ管理・Undo/Redo・ドラフト永続化）
+- DraftShape 操作（描画・検証・GeoJSON 変換）
+- エラー体系（13 エラークラス）
+
+### 未実装（仕様策定済み）
+
+- ジオメトリ演算: `splitPolygon`, `carveInnerPolygon`, `punchHole`, `expandWithPolygon`
+- 共有境界連動: `sharedEdgeMove`（座標ハッシュインデックス含む）
+- グループ外周取得: `getGroupPolygons`（Union 計算）
