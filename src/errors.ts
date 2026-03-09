@@ -1,9 +1,8 @@
 /**
- * All domain error classes for map-polygon-editor.
+ * All domain error classes for map-polygon-editor v2.
  *
  * Each class:
  * - Extends Error
- * - Sets `this.name` to the class name for reliable instanceof checks
  * - Restores the prototype chain for correct instanceof in transpiled output
  */
 
@@ -13,16 +12,6 @@ export class NotInitializedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "NotInitializedError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when `areaLevels` config has circular refs, duplicate keys, etc. */
-export class InvalidAreaLevelConfigError extends Error {
-  override name = "InvalidAreaLevelConfigError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidAreaLevelConfigError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -47,62 +36,72 @@ export class StorageError extends Error {
   }
 }
 
-/** Thrown when a referenced AreaID does not exist. */
-export class AreaNotFoundError extends Error {
-  override name = "AreaNotFoundError" as const;
+/** Thrown when a referenced PolygonID does not exist. */
+export class PolygonNotFoundError extends Error {
+  override name = "PolygonNotFoundError" as const;
   constructor(message: string) {
     super(message);
-    this.name = "AreaNotFoundError";
+    this.name = "PolygonNotFoundError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/** Thrown when a referenced level_key does not exist in areaLevels. */
-export class AreaLevelNotFoundError extends Error {
-  override name = "AreaLevelNotFoundError" as const;
+/** Thrown when a referenced GroupID does not exist. */
+export class GroupNotFoundError extends Error {
+  override name = "GroupNotFoundError" as const;
   constructor(message: string) {
     super(message);
-    this.name = "AreaLevelNotFoundError";
+    this.name = "GroupNotFoundError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/** Thrown when Area level and parent level relationship is inconsistent. */
-export class LevelMismatchError extends Error {
-  override name = "LevelMismatchError" as const;
+/** Thrown when an operation would leave a group with zero children. */
+export class GroupWouldBeEmptyError extends Error {
+  override name = "GroupWouldBeEmptyError" as const;
   constructor(message: string) {
     super(message);
-    this.name = "LevelMismatchError";
+    this.name = "GroupWouldBeEmptyError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/** Thrown when trying to delete or directly edit an area that has explicit children. */
-export class AreaHasChildrenError extends Error {
-  override name = "AreaHasChildrenError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "AreaHasChildrenError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when reparenting would leave the old parent with zero explicit children. */
-export class ParentWouldBeEmptyError extends Error {
-  override name = "ParentWouldBeEmptyError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "ParentWouldBeEmptyError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when reparenting would create a circular ancestor chain. */
+/** Thrown when moveToGroup would create a circular ancestor chain. */
 export class CircularReferenceError extends Error {
   override name = "CircularReferenceError" as const;
   constructor(message: string) {
     super(message);
     this.name = "CircularReferenceError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a node is set as its own parent. */
+export class SelfReferenceError extends Error {
+  override name = "SelfReferenceError" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "SelfReferenceError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when createGroup receives children with different parent_ids. */
+export class MixedParentError extends Error {
+  override name = "MixedParentError" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "MixedParentError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a root-only operation is called on a non-root polygon. */
+export class NotRootPolygonError extends Error {
+  override name = "NotRootPolygonError" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "NotRootPolygonError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -117,7 +116,7 @@ export class DraftNotClosedError extends Error {
   }
 }
 
-/** Thrown when a DraftShape has an invalid geometry (self-intersection, too few vertices, zero area). */
+/** Thrown when geometry is invalid (self-intersection, too few vertices, zero area). */
 export class InvalidGeometryError extends Error {
   override name = "InvalidGeometryError" as const;
   constructor(message: string) {
@@ -127,17 +126,7 @@ export class InvalidGeometryError extends Error {
   }
 }
 
-/** Thrown when an operation requires a child level but none is defined. */
-export class NoChildLevelError extends Error {
-  override name = "NoChildLevelError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "NoChildLevelError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when `loadDraftFromStorage` is called with an ID that does not exist in DraftStore. */
+/** Thrown when `loadDraftFromStorage` is called with an ID that does not exist. */
 export class DraftNotFoundError extends Error {
   override name = "DraftNotFoundError" as const;
   constructor(message: string) {

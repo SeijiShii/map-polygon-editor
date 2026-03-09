@@ -1,38 +1,40 @@
 import { describe, it, expect } from "vitest";
 import {
   NotInitializedError,
-  InvalidAreaLevelConfigError,
   DataIntegrityError,
   StorageError,
-  AreaNotFoundError,
-  AreaLevelNotFoundError,
-  LevelMismatchError,
-  AreaHasChildrenError,
-  ParentWouldBeEmptyError,
+  PolygonNotFoundError,
+  GroupNotFoundError,
+  GroupWouldBeEmptyError,
   CircularReferenceError,
+  SelfReferenceError,
+  MixedParentError,
+  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
-  NoChildLevelError,
   DraftNotFoundError,
 } from "./errors.js";
 
-describe("Error classes", () => {
+describe("v2 error classes", () => {
   const errorCases: Array<[string, new (msg: string) => Error]> = [
     ["NotInitializedError", NotInitializedError],
-    ["InvalidAreaLevelConfigError", InvalidAreaLevelConfigError],
     ["DataIntegrityError", DataIntegrityError],
     ["StorageError", StorageError],
-    ["AreaNotFoundError", AreaNotFoundError],
-    ["AreaLevelNotFoundError", AreaLevelNotFoundError],
-    ["LevelMismatchError", LevelMismatchError],
-    ["AreaHasChildrenError", AreaHasChildrenError],
-    ["ParentWouldBeEmptyError", ParentWouldBeEmptyError],
+    ["PolygonNotFoundError", PolygonNotFoundError],
+    ["GroupNotFoundError", GroupNotFoundError],
+    ["GroupWouldBeEmptyError", GroupWouldBeEmptyError],
     ["CircularReferenceError", CircularReferenceError],
+    ["SelfReferenceError", SelfReferenceError],
+    ["MixedParentError", MixedParentError],
+    ["NotRootPolygonError", NotRootPolygonError],
     ["DraftNotClosedError", DraftNotClosedError],
     ["InvalidGeometryError", InvalidGeometryError],
-    ["NoChildLevelError", NoChildLevelError],
     ["DraftNotFoundError", DraftNotFoundError],
   ];
+
+  it("has exactly 13 error classes", () => {
+    expect(errorCases).toHaveLength(13);
+  });
 
   for (const [name, ErrorClass] of errorCases) {
     describe(name, () => {
@@ -83,31 +85,22 @@ describe("Error classes", () => {
         expect((e as StorageError).message).toBe("adapter failed");
       }
     });
-
-    it("DraftNotFoundError can be caught and checked", () => {
-      try {
-        throw new DraftNotFoundError("draft-123 not found");
-      } catch (e) {
-        expect(e).toBeInstanceOf(DraftNotFoundError);
-        expect(e).toBeInstanceOf(Error);
-      }
-    });
   });
 
   describe("different error types are distinct classes", () => {
-    it("AreaNotFoundError is not instanceof AreaLevelNotFoundError", () => {
-      const err = new AreaNotFoundError("area-1 not found");
-      expect(err).not.toBeInstanceOf(AreaLevelNotFoundError);
+    it("PolygonNotFoundError is not instanceof GroupNotFoundError", () => {
+      const err = new PolygonNotFoundError("p-1 not found");
+      expect(err).not.toBeInstanceOf(GroupNotFoundError);
     });
 
-    it("DraftNotFoundError is not instanceof AreaNotFoundError", () => {
+    it("DraftNotFoundError is not instanceof PolygonNotFoundError", () => {
       const err = new DraftNotFoundError("draft not found");
-      expect(err).not.toBeInstanceOf(AreaNotFoundError);
+      expect(err).not.toBeInstanceOf(PolygonNotFoundError);
     });
 
-    it("InvalidAreaLevelConfigError is not instanceof InvalidGeometryError", () => {
-      const err = new InvalidAreaLevelConfigError("bad config");
-      expect(err).not.toBeInstanceOf(InvalidGeometryError);
+    it("GroupWouldBeEmptyError is not instanceof MixedParentError", () => {
+      const err = new GroupWouldBeEmptyError("would be empty");
+      expect(err).not.toBeInstanceOf(MixedParentError);
     });
   });
 });

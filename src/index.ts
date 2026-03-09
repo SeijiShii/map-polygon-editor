@@ -1,48 +1,43 @@
 // Core types
 export type {
-  AreaID,
-  AreaLevel,
-  Area,
-  AreaGeometry,
+  PolygonID,
+  GroupID,
+  DraftID,
   GeoJSONPolygon,
-  GeoJSONMultiPolygon,
+  MapPolygon,
+  Group,
   Point,
   DraftShape,
-  DraftID,
   PersistedDraft,
   StorageAdapter,
-  AreaInput,
   ChangeSet,
   HistoryEntry,
   GeometryViolation,
   GeometryViolationCode,
 } from "./types/index.js";
-export { makeAreaID, makeDraftID } from "./types/index.js";
+export { makePolygonID, makeGroupID, makeDraftID } from "./types/index.js";
 
 // Error classes
 export {
   NotInitializedError,
-  InvalidAreaLevelConfigError,
   DataIntegrityError,
   StorageError,
-  AreaNotFoundError,
-  AreaLevelNotFoundError,
-  LevelMismatchError,
-  AreaHasChildrenError,
-  ParentWouldBeEmptyError,
+  PolygonNotFoundError,
+  GroupNotFoundError,
+  GroupWouldBeEmptyError,
   CircularReferenceError,
+  SelfReferenceError,
+  MixedParentError,
+  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
-  NoChildLevelError,
   DraftNotFoundError,
 } from "./errors.js";
 
-// AreaLevel validation and store
-export { validateAreaLevels } from "./area-level/area-level-validator.js";
-export { AreaLevelStore } from "./area-level/area-level-store.js";
-
-// Area store
-export { AreaStore } from "./area-store/area-store.js";
+// Stores
+export { PolygonStore } from "./polygon-store/polygon-store.js";
+export { GroupStore } from "./group-store/group-store.js";
+export { DraftStore } from "./draft/draft-store.js";
 
 // Draft operations (pure functions)
 export {
@@ -56,11 +51,8 @@ export {
   draftToGeoJSON,
 } from "./draft/draft-operations.js";
 
-// Draft store
-export { DraftStore } from "./draft/draft-store.js";
-
 // Draft validation
 export { validateDraft } from "./draft/validate-draft.js";
 
-// Main editor facade
+// Editor facade
 export { MapPolygonEditor } from "./editor.js";
