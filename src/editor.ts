@@ -25,6 +25,7 @@ import {
   featureCollection,
 } from "@turf/helpers";
 import { lineIntersect } from "@turf/line-intersect";
+import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { intersection as polyClipIntersection } from "polyclip-ts";
 import {
   NotInitializedError,
@@ -60,8 +61,9 @@ export class MapPolygonEditor {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
 
-  /** Coordinate hash index: "lng,lat" → Set of PolygonIDs that have a vertex there */
+  /** Coordinate hash index: quantized "gx,gy" → Set of PolygonIDs that have a vertex in that cell */
   private coordIndex = new Map<string, Set<PolygonID>>();
+  private readonly coordEpsilon = 1e-8;
 
   constructor(config: MapPolygonEditorConfig) {
     this.storageAdapter = config.storageAdapter;
@@ -241,11 +243,22 @@ export class MapPolygonEditor {
     }
 
     const [oldLng, oldLat] = oldCoord;
-    const key = this.coordKey(oldLng, oldLat);
-    const affectedIds = this.coordIndex.get(key);
 
-    // Collect all polygons that share this coordinate
-    const polygonIdsToUpdate = affectedIds ? [...affectedIds] : [polygonId];
+    // Epsilon-based lookup: find all polygon IDs in neighboring grid cells
+    const candidateIds = this.findNearbyPolygonIds(oldLng, oldLat);
+    // Filter to only polygons that actually have a vertex within epsilon
+    const polygonIdsToUpdate: PolygonID[] = [];
+    for (const pid of candidateIds) {
+      const p = this.polygonStore.get(pid);
+      if (!p) continue;
+      const hasMatch = p.geometry.coordinates[0].some((c) =>
+        this.coordWithinEpsilon(c[0], c[1], oldLng, oldLat),
+      );
+      if (hasMatch) polygonIdsToUpdate.push(pid);
+    }
+    if (!polygonIdsToUpdate.includes(polygonId)) {
+      polygonIdsToUpdate.push(polygonId);
+    }
 
     const modifiedPolygons: Array<{ before: MapPolygon; after: MapPolygon }> =
       [];
@@ -263,7 +276,9 @@ export class MapPolygonEditor {
         },
       };
       const newCoords = p.geometry.coordinates[0].map((c) =>
-        c[0] === oldLng && c[1] === oldLat ? [lng, lat] : [...c],
+        this.coordWithinEpsilon(c[0], c[1], oldLng, oldLat)
+          ? [lng, lat]
+          : [...c],
       );
       const newGeometry: GeoJSONPolygon = {
         type: "Polygon",
@@ -649,51 +664,186 @@ export class MapPolygonEditor {
     const intersections = lineIntersect(polyFeature, lineFeature);
     const numIntersections = intersections.features.length;
 
-    if (numIntersections < 2) {
-      // 0 intersections: no-op; 1 intersection: vertex insertion only (future)
+    if (numIntersections === 0) {
       return { polygons: [] };
     }
 
-    // Split the polygon using half-plane approach
-    // Compute the perpendicular normal of the cut line
-    const [x1, y1] = lineCoords[0];
-    const [x2, y2] = lineCoords[lineCoords.length - 1];
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    const nx = -dy / len;
-    const ny = dx / len;
-    const offset = 1000; // large enough to cover any polygon
+    if (numIntersections === 1) {
+      // Single intersection: insert vertex on polygon boundary
+      const pt = intersections.features[0].geometry.coordinates as [
+        number,
+        number,
+      ];
+      const rings = polygon.geometry.coordinates;
+      const outerRing = rings[0];
+      const eps = 1e-8;
 
-    // Build half-plane polygons
-    const leftHalf: number[][] = [
-      [x1, y1],
-      [x2, y2],
-      [x2 + nx * offset, y2 + ny * offset],
-      [x1 + nx * offset, y1 + ny * offset],
-      [x1, y1],
-    ];
-    const rightHalf: number[][] = [
-      [x1, y1],
-      [x2, y2],
-      [x2 - nx * offset, y2 - ny * offset],
-      [x1 - nx * offset, y1 - ny * offset],
-      [x1, y1],
-    ];
+      // Check if vertex already exists
+      const alreadyExists = outerRing.some(
+        (v) => Math.abs(v[0] - pt[0]) < eps && Math.abs(v[1] - pt[1]) < eps,
+      );
+      if (alreadyExists) {
+        return { polygons: [] };
+      }
 
-    const leftResult = polyClipIntersection(
-      polyCoords as [number, number][][],
-      [leftHalf as [number, number][]],
+      // Find the edge where the intersection falls and insert
+      let insertIdx = -1;
+      for (let i = 0; i < outerRing.length - 1; i++) {
+        const [ax, ay] = outerRing[i];
+        const [bx, by] = outerRing[i + 1];
+        // Check if pt is on segment [a, b] via distance sum
+        const dAP = Math.sqrt((pt[0] - ax) ** 2 + (pt[1] - ay) ** 2);
+        const dPB = Math.sqrt((bx - pt[0]) ** 2 + (by - pt[1]) ** 2);
+        const dAB = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        if (Math.abs(dAP + dPB - dAB) < eps * 1000) {
+          insertIdx = i + 1;
+          break;
+        }
+      }
+
+      if (insertIdx === -1) {
+        return { polygons: [] };
+      }
+
+      // Build new coordinates with inserted vertex
+      const newOuterRing = [
+        ...outerRing.slice(0, insertIdx),
+        pt,
+        ...outerRing.slice(insertIdx),
+      ];
+      const newCoords = [newOuterRing, ...rings.slice(1)];
+
+      const before = { ...polygon, geometry: { ...polygon.geometry } };
+      const after: MapPolygon = {
+        ...polygon,
+        geometry: { type: "Polygon" as const, coordinates: newCoords },
+        updated_at: new Date(),
+      };
+
+      this.unindexPolygon(polygon);
+      this.polygonStore.update(after);
+      this.indexPolygon(after);
+
+      this.pushHistory({
+        createdPolygons: [],
+        deletedPolygons: [],
+        modifiedPolygons: [{ before, after }],
+        createdGroups: [],
+        deletedGroups: [],
+        modifiedGroups: [],
+      });
+
+      await this.storageAdapter.batchWrite({
+        createdPolygons: [],
+        deletedPolygonIds: [],
+        modifiedPolygons: [after],
+        createdGroups: [],
+        deletedGroupIds: [],
+        modifiedGroups: [],
+      });
+
+      return { polygons: [] };
+    }
+
+    // Sort intersection points by parameter along the polyline (not simple projection)
+    const intPts = intersections.features.map(
+      (f) => f.geometry.coordinates as [number, number],
     );
-    const rightResult = polyClipIntersection(
-      polyCoords as [number, number][][],
-      [rightHalf as [number, number][]],
-    );
+
+    const paramAlongPolyline = (pt: [number, number]): number => {
+      let cumDist = 0;
+      for (let i = 0; i < lineCoords.length - 1; i++) {
+        const [ax, ay] = lineCoords[i];
+        const [bx, by] = lineCoords[i + 1];
+        const segLen = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        const dAP = Math.sqrt((pt[0] - ax) ** 2 + (pt[1] - ay) ** 2);
+        const dPB = Math.sqrt((bx - pt[0]) ** 2 + (by - pt[1]) ** 2);
+        if (Math.abs(dAP + dPB - segLen) < 1e-6) {
+          return cumDist + dAP;
+        }
+        cumDist += segLen;
+      }
+      return cumDist;
+    };
+
+    intPts.sort((a, b) => paramAlongPolyline(a) - paramAlongPolyline(b));
+
+    // Determine which segments between consecutive intersections are inside the polygon
+    const insideSegments: [number, number][][] = [];
+    for (let i = 0; i < intPts.length - 1; i++) {
+      const mid: [number, number] = [
+        (intPts[i][0] + intPts[i + 1][0]) / 2,
+        (intPts[i][1] + intPts[i + 1][1]) / 2,
+      ];
+      if (booleanPointInPolygon(mid, polyFeature, { ignoreBoundary: true })) {
+        insideSegments.push([intPts[i], intPts[i + 1]]);
+      }
+    }
+
+    if (insideSegments.length === 0) {
+      return { polygons: [] };
+    }
+
+    // Iterative splitting: for each inside segment, split pieces that it crosses
+    let pieces: number[][][][] = [polyCoords as number[][][]];
+    const halfPlaneOffset = 1000;
+
+    for (const [p1, p2] of insideSegments) {
+      const sdx = p2[0] - p1[0];
+      const sdy = p2[1] - p1[1];
+      const slen = Math.sqrt(sdx * sdx + sdy * sdy);
+      if (slen < 1e-12) continue;
+      const snx = -sdy / slen;
+      const sny = sdx / slen;
+
+      const newPieces: number[][][][] = [];
+      for (const piece of pieces) {
+        // Check if this segment intersects this piece
+        const pieceFeature = turfPolygon(piece);
+        const segLine = turfLineString([p1, p2]);
+        const pieceIntersections = lineIntersect(pieceFeature, segLine);
+
+        if (pieceIntersections.features.length >= 2) {
+          // Split using half-plane approach
+          const leftHalf: number[][] = [
+            p1,
+            p2,
+            [p2[0] + snx * halfPlaneOffset, p2[1] + sny * halfPlaneOffset],
+            [p1[0] + snx * halfPlaneOffset, p1[1] + sny * halfPlaneOffset],
+            p1,
+          ];
+          const rightHalf: number[][] = [
+            p1,
+            p2,
+            [p2[0] - snx * halfPlaneOffset, p2[1] - sny * halfPlaneOffset],
+            [p1[0] - snx * halfPlaneOffset, p1[1] - sny * halfPlaneOffset],
+            p1,
+          ];
+
+          const leftResult = polyClipIntersection(
+            piece as [number, number][][],
+            [leftHalf as [number, number][]],
+          );
+          const rightResult = polyClipIntersection(
+            piece as [number, number][][],
+            [rightHalf as [number, number][]],
+          );
+
+          if (leftResult.length > 0 || rightResult.length > 0) {
+            for (const r of leftResult) newPieces.push(r);
+            for (const r of rightResult) newPieces.push(r);
+          } else {
+            newPieces.push(piece);
+          }
+        } else {
+          newPieces.push(piece);
+        }
+      }
+      pieces = newPieces;
+    }
 
     // Collect all result polygons
-    const resultCoords: number[][][][] = [];
-    for (const poly of leftResult) resultCoords.push(poly);
-    for (const poly of rightResult) resultCoords.push(poly);
+    const resultCoords = pieces;
 
     if (resultCoords.length < 2) {
       // Cut line doesn't effectively divide the polygon
@@ -1434,14 +1584,44 @@ export class MapPolygonEditor {
   // Coordinate Hash Index
   // ============================================================
 
-  private coordKey(lng: number, lat: number): string {
-    return `${lng},${lat}`;
+  private coordGridKey(lng: number, lat: number): string {
+    const gx = Math.floor(lng / this.coordEpsilon);
+    const gy = Math.floor(lat / this.coordEpsilon);
+    return `${gx},${gy}`;
+  }
+
+  /** Find all polygon IDs that have a vertex within epsilon of (lng, lat) */
+  private findNearbyPolygonIds(lng: number, lat: number): Set<PolygonID> {
+    const gx = Math.floor(lng / this.coordEpsilon);
+    const gy = Math.floor(lat / this.coordEpsilon);
+    const result = new Set<PolygonID>();
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const key = `${gx + dx},${gy + dy}`;
+        const set = this.coordIndex.get(key);
+        if (set) {
+          for (const id of set) result.add(id);
+        }
+      }
+    }
+    return result;
+  }
+
+  private coordWithinEpsilon(
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+  ): boolean {
+    return (
+      Math.abs(a - c) < this.coordEpsilon && Math.abs(b - d) < this.coordEpsilon
+    );
   }
 
   private indexPolygon(polygon: MapPolygon): void {
     const coords = polygon.geometry.coordinates[0];
     for (const [lng, lat] of coords) {
-      const key = this.coordKey(lng, lat);
+      const key = this.coordGridKey(lng, lat);
       let set = this.coordIndex.get(key);
       if (!set) {
         set = new Set();
@@ -1454,7 +1634,7 @@ export class MapPolygonEditor {
   private unindexPolygon(polygon: MapPolygon): void {
     const coords = polygon.geometry.coordinates[0];
     for (const [lng, lat] of coords) {
-      const key = this.coordKey(lng, lat);
+      const key = this.coordGridKey(lng, lat);
       const set = this.coordIndex.get(key);
       if (set) {
         set.delete(polygon.id);

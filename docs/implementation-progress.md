@@ -24,7 +24,7 @@
 
 ```
 Test Files  8 passed (8)
-     Tests  299 passed (299)
+     Tests  307 passed (307)
 ```
 
 ---
@@ -39,7 +39,7 @@ Test Files  8 passed (8)
 | `src/errors.ts` | 66 | 12 エラークラス |
 | `src/polygon-store/` | 14 | PolygonStore（byId + byParent デュアルインデックス） |
 | `src/group-store/` | 13 | GroupStore（同上） |
-| `src/editor.ts` | 94 | MapPolygonEditor ファサード（全 API 実装済み） |
+| `src/editor.ts` | 102 | MapPolygonEditor ファサード（全 API 実装済み） |
 | `src/draft/draft-operations.ts` | 42 | v1 から流用 |
 | `src/draft/validate-draft.ts` | 27 | v1 から流用 |
 | `src/draft/draft-store.ts` | 29 | v1 から流用 |
@@ -53,8 +53,8 @@ Test Files  8 passed (8)
 | Group 管理 | ✅ 完了 | Phase 3 |
 | Draft 永続化 + Undo/Redo | ✅ 完了 | Phase 4 |
 | `getGroupPolygons` | ✅ 完了 | Phase 5 (6 tests) |
-| `sharedEdgeMove` | ✅ 完了 | Phase 6 (8 tests) |
-| `splitPolygon` | ✅ 完了 | Phase 7 (7 tests) |
+| `sharedEdgeMove` | ✅ 完了 | Phase 6 (9 tests) |
+| `splitPolygon` | ✅ 完了 | Phase 7 (12 tests) |
 | `carveInnerPolygon` | ✅ 完了 | Phase 8 (5 tests) |
 | `punchHole` | ✅ 完了 | Phase 9 (5 tests) |
 | `expandWithPolygon` | ✅ 完了 | Phase 10 (5 tests) |
@@ -76,3 +76,4 @@ Test Files  8 passed (8)
 | 2026-03-09 | v2 仕様策定: Area+AreaLevel → Polygon+Group モデルへの移行を決定 |
 | 2026-03-09 | v2 実装完了: 型・エラー・Store・Editor 全面書き換え（267テスト、カバレッジ93%） |
 | 2026-03-09 | v2 ジオメトリ API 実装: getGroupPolygons, sharedEdgeMove, splitPolygon, carveInnerPolygon, punchHole, expandWithPolygon（299テスト） |
+| 2026-03-09 | splitPolygon 強化: ヒゲ自動除去、1交差頂点挿入、2N交差マルチセグメント分割。sharedEdgeMove epsilon比較（307テスト） |

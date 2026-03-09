@@ -995,6 +995,49 @@ describe("MapPolygonEditor", () => {
       // p-2 should be unchanged
       expect(u2.geometry.coordinates[0]).toEqual(farSquare.coordinates[0]);
     });
+
+    it("finds shared vertices within epsilon tolerance", async () => {
+      // Two squares with a shared edge, but coordinates differ by tiny amount (< 1e-8)
+      const leftSquareExact: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+            [0, 0],
+          ],
+        ],
+      };
+      const rightSquareSlightlyOff: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [1 + 1e-9, 0 + 1e-10], // nearly [1,0]
+            [2, 0],
+            [2, 1],
+            [1 - 1e-10, 1 + 1e-9], // nearly [1,1]
+            [1 + 1e-9, 0 + 1e-10],
+          ],
+        ],
+      };
+
+      const p1 = makePolygonWithGeom("p-1", null, leftSquareExact);
+      const p2 = makePolygonWithGeom("p-2", null, rightSquareSlightlyOff);
+      const { editor } = await createEditor([p1, p2]);
+
+      // Move p-1 vertex 1 [1,0] — p-2 vertex 0 [1+1e-9, 1e-10] should also move
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        1,
+        0,
+        1.5,
+      );
+      expect(result).toHaveLength(2); // both polygons updated
+      const u2 = editor.getPolygon(makePolygonID("p-2"))!;
+      expect(u2.geometry.coordinates[0][0]).toEqual([1.5, 0]);
+    });
   });
 
   // ============================================================
@@ -1133,6 +1176,81 @@ describe("MapPolygonEditor", () => {
       expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
     });
 
+    it("inserts vertex when cut line has exactly 1 intersection", async () => {
+      // Unit square: [0,0],[1,0],[1,1],[0,1],[0,0] — 5 coords (4 unique + closing)
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor } = await createEditor([p]);
+
+      // Cut line from outside touching bottom edge at (0.5, 0)
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 }, // outside below
+          { lat: 0, lng: 0.5 }, // hits bottom edge at midpoint
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      // No split — returns empty polygons
+      expect(result.polygons).toHaveLength(0);
+      expect(result.group).toBeUndefined();
+
+      // Original polygon should still exist but now have the vertex inserted
+      const updated = editor.getPolygon(makePolygonID("p-1"))!;
+      expect(updated).not.toBeNull();
+      const coords = updated.geometry.coordinates[0];
+      // Originally 5 coords, now 6 (new vertex at [0.5, 0] inserted on bottom edge)
+      expect(coords).toHaveLength(6);
+      // The new vertex [0.5, 0] should be between [0,0] and [1,0]
+      const hasInserted = coords.some(
+        (c) => Math.abs(c[0] - 0.5) < 0.01 && Math.abs(c[1]) < 0.01,
+      );
+      expect(hasInserted).toBe(true);
+    });
+
+    it("vertex insertion is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor } = await createEditor([p]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 0, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      const before = editor.getPolygon(makePolygonID("p-1"))!;
+      const originalCoordCount = before.geometry.coordinates[0].length;
+
+      await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      const after = editor.getPolygon(makePolygonID("p-1"))!;
+      expect(after.geometry.coordinates[0].length).toBe(originalCoordCount + 1);
+
+      await editor.undo();
+      const restored = editor.getPolygon(makePolygonID("p-1"))!;
+      expect(restored.geometry.coordinates[0].length).toBe(originalCoordCount);
+    });
+
+    it("vertex insertion does not insert duplicate if vertex already exists", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor } = await createEditor([p]);
+
+      // Cut line hitting an existing vertex [1, 0] (corner of square)
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 1 },
+          { lat: 0, lng: 1 },
+        ],
+        isClosed: false,
+      };
+
+      await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      const updated = editor.getPolygon(makePolygonID("p-1"))!;
+      // Should remain unchanged — vertex already exists
+      expect(updated.geometry.coordinates[0]).toHaveLength(5);
+    });
+
     it("is undoable", async () => {
       const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
       const { editor } = await createEditor([p]);
@@ -1167,6 +1285,137 @@ describe("MapPolygonEditor", () => {
       await editor.splitPolygon(makePolygonID("p-1"), cutLine);
       // batchWrite called: once for initialize (no), and once for split
       expect(adapter.batchWrite).toHaveBeenCalled();
+    });
+
+    it("trims whiskers and splits correctly when cut line bends outside polygon", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      // Cut line with bent whiskers:
+      // Starts at (-1,-1), enters polygon at (0.5,0), exits at (0.5,1), ends at (2,2)
+      // Effective cut is vertical at lng=0.5
+      // But raw first→last direction is diagonal (-1,-1)→(2,2)
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: -1 }, // whisker start (outside, bent)
+          { lat: 0, lng: 0.5 }, // enters polygon bottom edge
+          { lat: 1, lng: 0.5 }, // exits polygon top edge
+          { lat: 2, lng: 2 }, // whisker end (outside, bent)
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.polygons).toHaveLength(2);
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+
+      // The effective cut should be vertical at lng=0.5
+      // One polygon should have all lng ≤ 0.5+ε, the other all lng ≥ 0.5-ε
+      const eps = 0.01;
+      const maxLngs = result.polygons.map((p) =>
+        Math.max(...p.geometry.coordinates[0].map((c) => c[0])),
+      );
+      const minLngs = result.polygons.map((p) =>
+        Math.min(...p.geometry.coordinates[0].map((c) => c[0])),
+      );
+
+      // Sort so polygon with smaller max-lng comes first (left half)
+      const sorted = [0, 1].sort((a, b) => maxLngs[a] - maxLngs[b]);
+      // Left half: max lng should be ~0.5
+      expect(maxLngs[sorted[0]]).toBeLessThanOrEqual(0.5 + eps);
+      // Right half: min lng should be ~0.5
+      expect(minLngs[sorted[1]]).toBeGreaterThanOrEqual(0.5 - eps);
+    });
+
+    it("trims straight whiskers without changing split result", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      // Straight whiskers: same direction, just extended beyond polygon
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -5, lng: 0.5 }, // far below
+          { lat: 0, lng: 0.5 }, // bottom edge
+          { lat: 1, lng: 0.5 }, // top edge
+          { lat: 5, lng: 0.5 }, // far above
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.polygons).toHaveLength(2);
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+    });
+
+    it("splits into 3 pieces with 4 intersections (two horizontal cuts)", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      // Cut line that makes two horizontal cuts through the unit square:
+      // Enter left edge at (0, 0.3), cross to right edge at (1, 0.3),
+      // go outside, come back at (1, 0.7), cross to left edge at (0, 0.7)
+      // Result: 3 horizontal strips
+      const cutLine: DraftShape = {
+        points: [
+          { lat: 0.3, lng: -0.5 }, // outside left
+          { lat: 0.3, lng: 0 }, // enter left edge
+          { lat: 0.3, lng: 1 }, // exit right edge
+          { lat: 0.7, lng: 1.5 }, // outside right (transition)
+          { lat: 0.7, lng: 1 }, // re-enter right edge
+          { lat: 0.7, lng: 0 }, // exit left edge
+          { lat: 0.7, lng: -0.5 }, // outside left
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.polygons).toHaveLength(3);
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+
+      // Each strip should span the full width (lng 0 to 1)
+      for (const poly of result.polygons) {
+        const lngs = poly.geometry.coordinates[0].map((c) => c[0]);
+        expect(Math.min(...lngs)).toBeLessThanOrEqual(0.01);
+        expect(Math.max(...lngs)).toBeGreaterThanOrEqual(0.99);
+      }
+
+      // Verify the 3 strips have distinct lat ranges
+      const latMids = result.polygons.map((poly) => {
+        const lats = poly.geometry.coordinates[0].map((c) => c[1]);
+        return (Math.min(...lats) + Math.max(...lats)) / 2;
+      });
+      latMids.sort((a, b) => a - b);
+      // Bottom strip center ~0.15, middle ~0.5, top ~0.85
+      expect(latMids[0]).toBeLessThan(0.25);
+      expect(latMids[1]).toBeGreaterThan(0.35);
+      expect(latMids[1]).toBeLessThan(0.65);
+      expect(latMids[2]).toBeGreaterThan(0.75);
+    });
+
+    it("multi-segment split is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: 0.3, lng: -0.5 },
+          { lat: 0.3, lng: 0 },
+          { lat: 0.3, lng: 1 },
+          { lat: 0.7, lng: 1.5 },
+          { lat: 0.7, lng: 1 },
+          { lat: 0.7, lng: 0 },
+          { lat: 0.7, lng: -0.5 },
+        ],
+        isClosed: false,
+      };
+
+      await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+      expect(editor.getAllPolygons()).toHaveLength(3);
+
+      await editor.undo();
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+      expect(editor.getAllPolygons()).toHaveLength(1);
     });
   });
 
