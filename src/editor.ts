@@ -24,7 +24,6 @@ import {
   PolygonNotFoundError,
   GroupNotFoundError,
   GroupWouldBeEmptyError,
-  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
@@ -298,11 +297,6 @@ export class MapPolygonEditor {
     const polygon = this.polygonStore.get(polygonId);
     if (!polygon)
       throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
-    if (polygon.parent_id !== null) {
-      throw new NotRootPolygonError(
-        `Polygon "${polygonId}" is not a root polygon`,
-      );
-    }
 
     const coords = polygon.geometry.coordinates[0];
     const points = coords.slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
@@ -317,11 +311,6 @@ export class MapPolygonEditor {
     const polygon = this.polygonStore.get(polygonId);
     if (!polygon)
       throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
-    if (polygon.parent_id !== null) {
-      throw new NotRootPolygonError(
-        `Polygon "${polygonId}" is not a root polygon`,
-      );
-    }
     if (!draft.isClosed) {
       throw new DraftNotClosedError("DraftShape must be closed");
     }

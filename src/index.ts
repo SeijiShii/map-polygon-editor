@@ -28,7 +28,6 @@ export {
   CircularReferenceError,
   SelfReferenceError,
   MixedParentError,
-  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,

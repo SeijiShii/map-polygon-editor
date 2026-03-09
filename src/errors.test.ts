@@ -9,7 +9,6 @@ import {
   CircularReferenceError,
   SelfReferenceError,
   MixedParentError,
-  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
@@ -26,14 +25,13 @@ describe("v2 error classes", () => {
     ["CircularReferenceError", CircularReferenceError],
     ["SelfReferenceError", SelfReferenceError],
     ["MixedParentError", MixedParentError],
-    ["NotRootPolygonError", NotRootPolygonError],
     ["DraftNotClosedError", DraftNotClosedError],
     ["InvalidGeometryError", InvalidGeometryError],
     ["DraftNotFoundError", DraftNotFoundError],
   ];
 
-  it("has exactly 13 error classes", () => {
-    expect(errorCases).toHaveLength(13);
+  it("has exactly 12 error classes", () => {
+    expect(errorCases).toHaveLength(12);
   });
 
   for (const [name, ErrorClass] of errorCases) {

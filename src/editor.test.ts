@@ -15,7 +15,6 @@ import {
   PolygonNotFoundError,
   GroupNotFoundError,
   GroupWouldBeEmptyError,
-  NotRootPolygonError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
@@ -31,12 +30,27 @@ import {
 
 const triangle: GeoJSONPolygon = {
   type: "Polygon",
-  coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+  coordinates: [
+    [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 0],
+    ],
+  ],
 };
 
 const square: GeoJSONPolygon = {
   type: "Polygon",
-  coordinates: [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+  coordinates: [
+    [
+      [0, 0],
+      [2, 0],
+      [2, 2],
+      [0, 2],
+      [0, 0],
+    ],
+  ],
 };
 
 function closedDraft(coords: [number, number][]): DraftShape {
@@ -46,10 +60,23 @@ function closedDraft(coords: [number, number][]): DraftShape {
   };
 }
 
-const triangleDraft = closedDraft([[0, 0], [1, 0], [1, 1]]);
-const squareDraft = closedDraft([[0, 0], [2, 0], [2, 2], [0, 2]]);
+const triangleDraft = closedDraft([
+  [0, 0],
+  [1, 0],
+  [1, 1],
+]);
+const squareDraft = closedDraft([
+  [0, 0],
+  [2, 0],
+  [2, 2],
+  [0, 2],
+]);
 
-function makePolygon(id: string, parentId: string | null = null, name = ""): MapPolygon {
+function makePolygon(
+  id: string,
+  parentId: string | null = null,
+  name = "",
+): MapPolygon {
   const now = new Date();
   return {
     id: makePolygonID(id),
@@ -61,7 +88,11 @@ function makePolygon(id: string, parentId: string | null = null, name = ""): Map
   };
 }
 
-function makeGroup(id: string, parentId: string | null = null, name = ""): Group {
+function makeGroup(
+  id: string,
+  parentId: string | null = null,
+  name = "",
+): Group {
   const now = new Date();
   return {
     id: makeGroupID(id),
@@ -152,7 +183,9 @@ describe("MapPolygonEditor", () => {
     it("getPolygon returns polygon by ID", async () => {
       const p = makePolygon("p-1", null, "Test");
       const { editor } = await createEditor([p]);
-      expect(editor.getPolygon(makePolygonID("p-1"))?.display_name).toBe("Test");
+      expect(editor.getPolygon(makePolygonID("p-1"))?.display_name).toBe(
+        "Test",
+      );
     });
 
     it("getPolygon returns null for non-existent ID", async () => {
@@ -191,12 +224,18 @@ describe("MapPolygonEditor", () => {
     });
 
     it("getAllPolygons returns all polygons", async () => {
-      const { editor } = await createEditor([makePolygon("p-1"), makePolygon("p-2", "g-1")], [makeGroup("g-1")]);
+      const { editor } = await createEditor(
+        [makePolygon("p-1"), makePolygon("p-2", "g-1")],
+        [makeGroup("g-1")],
+      );
       expect(editor.getAllPolygons()).toHaveLength(2);
     });
 
     it("getAllGroups returns all groups", async () => {
-      const { editor } = await createEditor([], [makeGroup("g-1"), makeGroup("g-2", "g-1")]);
+      const { editor } = await createEditor(
+        [],
+        [makeGroup("g-1"), makeGroup("g-2", "g-1")],
+      );
       expect(editor.getAllGroups()).toHaveLength(2);
     });
 
@@ -228,14 +267,30 @@ describe("MapPolygonEditor", () => {
 
     it("throws DraftNotClosedError for open draft", async () => {
       const { editor } = await createEditor();
-      const open: DraftShape = { points: [{ lat: 0, lng: 0 }, { lat: 1, lng: 0 }], isClosed: false };
-      await expect(editor.saveAsPolygon(open, "fail")).rejects.toThrow(DraftNotClosedError);
+      const open: DraftShape = {
+        points: [
+          { lat: 0, lng: 0 },
+          { lat: 1, lng: 0 },
+        ],
+        isClosed: false,
+      };
+      await expect(editor.saveAsPolygon(open, "fail")).rejects.toThrow(
+        DraftNotClosedError,
+      );
     });
 
     it("throws InvalidGeometryError for draft with too few vertices", async () => {
       const { editor } = await createEditor();
-      const bad: DraftShape = { points: [{ lat: 0, lng: 0 }, { lat: 1, lng: 0 }], isClosed: true };
-      await expect(editor.saveAsPolygon(bad, "fail")).rejects.toThrow(InvalidGeometryError);
+      const bad: DraftShape = {
+        points: [
+          { lat: 0, lng: 0 },
+          { lat: 1, lng: 0 },
+        ],
+        isClosed: true,
+      };
+      await expect(editor.saveAsPolygon(bad, "fail")).rejects.toThrow(
+        InvalidGeometryError,
+      );
     });
 
     it("polygon is retrievable after save", async () => {
@@ -264,7 +319,9 @@ describe("MapPolygonEditor", () => {
 
     it("throws PolygonNotFoundError for non-existent polygon", async () => {
       const { editor } = await createEditor();
-      await expect(editor.renamePolygon(makePolygonID("nope"), "x")).rejects.toThrow(PolygonNotFoundError);
+      await expect(
+        editor.renamePolygon(makePolygonID("nope"), "x"),
+      ).rejects.toThrow(PolygonNotFoundError);
     });
   });
 
@@ -289,12 +346,16 @@ describe("MapPolygonEditor", () => {
       const g = makeGroup("g-1");
       const p = makePolygon("p-1", "g-1");
       const { editor } = await createEditor([p], [g]);
-      await expect(editor.deletePolygon(makePolygonID("p-1"))).rejects.toThrow(GroupWouldBeEmptyError);
+      await expect(editor.deletePolygon(makePolygonID("p-1"))).rejects.toThrow(
+        GroupWouldBeEmptyError,
+      );
     });
 
     it("throws PolygonNotFoundError for non-existent polygon", async () => {
       const { editor } = await createEditor();
-      await expect(editor.deletePolygon(makePolygonID("nope"))).rejects.toThrow(PolygonNotFoundError);
+      await expect(editor.deletePolygon(makePolygonID("nope"))).rejects.toThrow(
+        PolygonNotFoundError,
+      );
     });
   });
 
@@ -307,16 +368,20 @@ describe("MapPolygonEditor", () => {
       expect(draft.points.length).toBeGreaterThanOrEqual(3);
     });
 
-    it("throws NotRootPolygonError for non-root polygon", async () => {
+    it("loads a non-root polygon as DraftShape (no root restriction)", async () => {
       const g = makeGroup("g-1");
       const p = makePolygon("p-1", "g-1");
       const { editor } = await createEditor([p], [g]);
-      expect(() => editor.loadPolygonToDraft(makePolygonID("p-1"))).toThrow(NotRootPolygonError);
+      const draft = editor.loadPolygonToDraft(makePolygonID("p-1"));
+      expect(draft.isClosed).toBe(true);
+      expect(draft.points.length).toBeGreaterThanOrEqual(3);
     });
 
     it("throws PolygonNotFoundError for non-existent polygon", async () => {
       const { editor } = await createEditor();
-      expect(() => editor.loadPolygonToDraft(makePolygonID("nope"))).toThrow(PolygonNotFoundError);
+      expect(() => editor.loadPolygonToDraft(makePolygonID("nope"))).toThrow(
+        PolygonNotFoundError,
+      );
     });
   });
 
@@ -328,11 +393,15 @@ describe("MapPolygonEditor", () => {
       expect(updated.geometry.coordinates[0]).toHaveLength(5); // square has 5 coords (closed)
     });
 
-    it("throws NotRootPolygonError for non-root polygon", async () => {
+    it("updates geometry of a non-root polygon (no root restriction)", async () => {
       const g = makeGroup("g-1");
       const p = makePolygon("p-1", "g-1");
       const { editor } = await createEditor([p], [g]);
-      await expect(editor.updatePolygonGeometry(makePolygonID("p-1"), squareDraft)).rejects.toThrow(NotRootPolygonError);
+      const updated = await editor.updatePolygonGeometry(
+        makePolygonID("p-1"),
+        squareDraft,
+      );
+      expect(updated.geometry.coordinates[0]).toHaveLength(5);
     });
   });
 
@@ -359,7 +428,10 @@ describe("MapPolygonEditor", () => {
       const p2 = makePolygon("p-2", "g-parent");
       const p3 = makePolygon("p-3", "g-parent");
       const { editor } = await createEditor([p1, p2, p3], [g]);
-      const sub = await editor.createGroup("Sub", [makePolygonID("p-1"), makePolygonID("p-2")]);
+      const sub = await editor.createGroup("Sub", [
+        makePolygonID("p-1"),
+        makePolygonID("p-2"),
+      ]);
       expect(sub.parent_id).toBe(makeGroupID("g-parent"));
       expect(editor.getChildren(makeGroupID("g-parent"))).toHaveLength(2); // sub + p-3
     });
@@ -375,13 +447,18 @@ describe("MapPolygonEditor", () => {
         [makeGroup("g-1")],
       );
       await expect(
-        editor2.createGroup("fail", [makePolygonID("p-1"), makePolygonID("p-2")]),
+        editor2.createGroup("fail", [
+          makePolygonID("p-1"),
+          makePolygonID("p-2"),
+        ]),
       ).rejects.toThrow(MixedParentError);
     });
 
     it("throws GroupWouldBeEmptyError with empty childIds", async () => {
       const { editor } = await createEditor();
-      await expect(editor.createGroup("empty", [])).rejects.toThrow(GroupWouldBeEmptyError);
+      await expect(editor.createGroup("empty", [])).rejects.toThrow(
+        GroupWouldBeEmptyError,
+      );
     });
   });
 
@@ -397,7 +474,9 @@ describe("MapPolygonEditor", () => {
 
     it("throws GroupNotFoundError for non-existent group", async () => {
       const { editor } = await createEditor();
-      await expect(editor.renameGroup(makeGroupID("nope"), "x")).rejects.toThrow(GroupNotFoundError);
+      await expect(
+        editor.renameGroup(makeGroupID("nope"), "x"),
+      ).rejects.toThrow(GroupNotFoundError);
     });
   });
 
@@ -421,7 +500,9 @@ describe("MapPolygonEditor", () => {
       const p2 = makePolygon("p-2", "g-child");
       const { editor } = await createEditor([p1, p2], [gParent, gChild]);
       await editor.deleteGroup(makeGroupID("g-child"));
-      expect(editor.getPolygon(makePolygonID("p-1"))?.parent_id).toBe(makeGroupID("g-parent"));
+      expect(editor.getPolygon(makePolygonID("p-1"))?.parent_id).toBe(
+        makeGroupID("g-parent"),
+      );
     });
   });
 
@@ -447,7 +528,9 @@ describe("MapPolygonEditor", () => {
       const p2 = makePolygon("p-2", "g-1"); // existing child so group isn't empty
       const { editor } = await createEditor([p, p2], [g]);
       await editor.moveToGroup(makePolygonID("p-1"), makeGroupID("g-1"));
-      expect(editor.getPolygon(makePolygonID("p-1"))?.parent_id).toBe(makeGroupID("g-1"));
+      expect(editor.getPolygon(makePolygonID("p-1"))?.parent_id).toBe(
+        makeGroupID("g-1"),
+      );
     });
 
     it("moves a polygon to root (null)", async () => {
@@ -463,14 +546,18 @@ describe("MapPolygonEditor", () => {
       const g = makeGroup("g-1");
       const p = makePolygon("p-1", "g-1");
       const { editor } = await createEditor([p], [g]);
-      await expect(editor.moveToGroup(makePolygonID("p-1"), null)).rejects.toThrow(GroupWouldBeEmptyError);
+      await expect(
+        editor.moveToGroup(makePolygonID("p-1"), null),
+      ).rejects.toThrow(GroupWouldBeEmptyError);
     });
 
     it("throws SelfReferenceError when moving group into itself", async () => {
       const g = makeGroup("g-1");
       const p = makePolygon("p-1", "g-1");
       const { editor } = await createEditor([p], [g]);
-      await expect(editor.moveToGroup(makeGroupID("g-1"), makeGroupID("g-1"))).rejects.toThrow(SelfReferenceError);
+      await expect(
+        editor.moveToGroup(makeGroupID("g-1"), makeGroupID("g-1")),
+      ).rejects.toThrow(SelfReferenceError);
     });
 
     it("throws CircularReferenceError when creating cycle", async () => {
@@ -479,7 +566,9 @@ describe("MapPolygonEditor", () => {
       const p = makePolygon("p-1", "g-2"); // so g-2 isn't empty
       const p2 = makePolygon("p-2", "g-1"); // so g-1 won't be empty
       const { editor } = await createEditor([p, p2], [g1, g2]);
-      await expect(editor.moveToGroup(makeGroupID("g-1"), makeGroupID("g-2"))).rejects.toThrow(CircularReferenceError);
+      await expect(
+        editor.moveToGroup(makeGroupID("g-1"), makeGroupID("g-2")),
+      ).rejects.toThrow(CircularReferenceError);
     });
   });
 
@@ -502,7 +591,13 @@ describe("MapPolygonEditor", () => {
   describe("Phase 4: Draft Persistence", () => {
     it("saves, lists, loads, and deletes drafts", async () => {
       const { editor } = await createEditor();
-      const draft: DraftShape = { points: [{ lat: 0, lng: 0 }, { lat: 1, lng: 0 }], isClosed: false };
+      const draft: DraftShape = {
+        points: [
+          { lat: 0, lng: 0 },
+          { lat: 1, lng: 0 },
+        ],
+        isClosed: false,
+      };
 
       const persisted = await editor.saveDraftToStorage(draft);
       expect(persisted.id).toBeTruthy();
@@ -517,7 +612,9 @@ describe("MapPolygonEditor", () => {
 
     it("throws DraftNotFoundError for non-existent draft", async () => {
       const { editor } = await createEditor();
-      expect(() => editor.loadDraftFromStorage(makeDraftID("nope"))).toThrow(DraftNotFoundError);
+      expect(() => editor.loadDraftFromStorage(makeDraftID("nope"))).toThrow(
+        DraftNotFoundError,
+      );
     });
   });
 

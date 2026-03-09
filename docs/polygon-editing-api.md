@@ -128,24 +128,23 @@ deleteDraftFromStorage(id: DraftID) → Promise<void>
 
 ## 編集権限ルール
 
-### ルートポリゴン制約
+### Polygon の編集制約
 
-**geometry の直接編集（頂点の追加・削除・移動）はルートポリゴン（`parent_id === null`）にのみ許可する。**
+**PolygonID を持つ個々の Polygon（葉ノード）は、ツリー内の位置を問わず全て編集可能。**
+`getGroupPolygons` で返される外周ポリゴンは計算結果（GeoJSON のみ）であり、読み取り専用。
 
-| 操作 | ルートポリゴン | グループ内ポリゴン |
-|------|:---:|:---:|
-| 新規描画 → `saveAsPolygon` | ✅ 常にルートとして作成 | — |
-| `loadPolygonToDraft` | ✅ | ❌ `NotRootPolygonError` |
-| `updatePolygonGeometry` | ✅ | ❌ `NotRootPolygonError` |
-| `splitPolygon` | ✅ | ❌ `NotRootPolygonError`（暫定） |
-| `carveInnerPolygon` | ✅ | ❌ `NotRootPolygonError`（暫定） |
-| `punchHole` | ✅ | ❌ `NotRootPolygonError`（暫定） |
-| `expandWithPolygon` | ✅ | ❌ `NotRootPolygonError`（暫定） |
-| `sharedEdgeMove` | ✅ | ❌ `NotRootPolygonError` |
-| `renamePolygon` | ✅ | ✅ |
-| `deletePolygon` | ✅ | ✅ |
-
-> **暫定**: 分割・穴あけ系のグループ内ポリゴンへの適用は将来検討する可能性がある。
+| 操作 | 制約 |
+|------|------|
+| 新規描画 → `saveAsPolygon` | 常にルートとして作成 |
+| `loadPolygonToDraft` | 任意の Polygon |
+| `updatePolygonGeometry` | 任意の Polygon |
+| `splitPolygon` | 任意の Polygon。`wrapInGroup` オプションで結果配置を選択 |
+| `carveInnerPolygon` | 任意の Polygon。`wrapInGroup` オプション |
+| `punchHole` | 任意の Polygon。`wrapInGroup` オプション |
+| `expandWithPolygon` | 任意の Polygon。`wrapInGroup` オプション |
+| `sharedEdgeMove` | 任意の Polygon。影響は全ポリゴンに及ぶ |
+| `renamePolygon` | 任意の Polygon |
+| `deletePolygon` | 任意の Polygon。親 Group の最後の子の場合は `GroupWouldBeEmptyError` |
 
 ### 新規描画
 
@@ -169,15 +168,15 @@ after:   A ──────── C    A と C が直結
 
 ### sharedEdgeMove の影響範囲
 
-sharedEdgeMove はルートポリゴンに対して呼び出すが、影響は**全ポリゴン**に及ぶ。
+sharedEdgeMove は任意のポリゴンに対して呼び出せる。影響は**全ポリゴン**に及ぶ。
 グループの境界を問わず、同座標（epsilon 以内）の頂点を持つ全ポリゴンが連動更新される。
 
 ```
 Group A
-  ├── Polygon X (頂点 P を持つ)
+  ├── Polygon X (頂点 P を持つ)  ← sharedEdgeMove で P を移動
   └── Polygon Y (頂点 P を持つ)
 
-Polygon Z（ルート、頂点 P を持つ）  ← sharedEdgeMove で P を移動
+Polygon Z（ルート、頂点 P を持つ）
 
 → X, Y, Z 全てで頂点 P が連動更新される
 ```
@@ -236,7 +235,7 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 | メソッド | 引数 | 説明 |
 |----------|------|------|
 | `saveAsPolygon(draft, name)` | DraftShape、名称 | DraftShape をルートポリゴンとして保存 |
-| `updatePolygonGeometry(polygonId, draft)` | PolygonID、DraftShape | 既存ルートポリゴンの geometry を更新。非ルートは `NotRootPolygonError` |
+| `updatePolygonGeometry(polygonId, draft)` | PolygonID、DraftShape | 既存ポリゴンの geometry を更新 |
 | `renamePolygon(polygonId, name)` | PolygonID、新しい名前 | display_name を変更（ルート制限なし） |
 | `deletePolygon(polygonId)` | PolygonID | Polygon を削除（ルート制限なし）。親 Group の最後の子の場合は `GroupWouldBeEmptyError` |
 | `loadPolygonToDraft(polygonId)` | PolygonID | 保存済みルートポリゴンを DraftShape に変換して編集再開。非ルートは `NotRootPolygonError` |
@@ -339,12 +338,14 @@ moveToGroup(
 
 ```
 splitPolygon(
-  polygonId : PolygonID,     // ルートポリゴンのみ。非ルートは NotRootPolygonError
-  draft     : DraftShape     // isClosed = false。ヒゲ込みで渡してよい
-) → { group: Group, polygons: Polygon[] }
+  polygonId : PolygonID,     // 任意のポリゴン
+  draft     : DraftShape,    // isClosed = false。ヒゲ込みで渡してよい
+  options?  : { wrapInGroup?: boolean }  // デフォルト: true
+) → { group?: Group, polygons: Polygon[] }
   // 元の Polygon は削除される
-  // 新しい Group がルートに作成される
-  // Group の display_name は元の Polygon の display_name を引き継ぐ
+  // wrapInGroup: true → 新しい Group を元の Polygon の位置に作成し、分割結果を子にする
+  //   Group の display_name は元の Polygon の display_name を引き継ぐ
+  // wrapInGroup: false → 分割結果を元の Polygon の親に直接配置（Group は作成しない）
   // 各 Polygon の id は自動生成、display_name は空
 ```
 
@@ -354,11 +355,13 @@ splitPolygon(
 
 ```
 carveInnerPolygon(
-  polygonId : PolygonID,     // ルートポリゴンのみ。非ルートは NotRootPolygonError
-  loopPath  : [Point]        // 始点 = 終点 = 境界頂点
-) → { group: Group, outer: Polygon, inner: Polygon }
+  polygonId : PolygonID,     // 任意のポリゴン
+  loopPath  : [Point],       // 始点 = 終点 = 境界頂点
+  options?  : { wrapInGroup?: boolean }  // デフォルト: true
+) → { group?: Group, outer: Polygon, inner: Polygon }
   // 元の Polygon は削除される
-  // 新しい Group がルートに作成され outer + inner を子に持つ
+  // wrapInGroup: true → 新しい Group を作成し outer + inner を子に持つ
+  // wrapInGroup: false → outer, inner を元の Polygon の親に直接配置
   // outer = 元ポリゴンからループを除いた残り（C字型など）
   // inner = ループ内側の新ポリゴン
 ```
@@ -367,11 +370,13 @@ carveInnerPolygon(
 
 ```
 punchHole(
-  polygonId : PolygonID,     // ルートポリゴンのみ。非ルートは NotRootPolygonError
-  holePath  : [Point]        // 境界に触れない完全内側の閉じたループ
-) → { group: Group, donut: Polygon, inner: Polygon }
+  polygonId : PolygonID,     // 任意のポリゴン
+  holePath  : [Point],       // 境界に触れない完全内側の閉じたループ
+  options?  : { wrapInGroup?: boolean }  // デフォルト: true
+) → { group?: Group, donut: Polygon, inner: Polygon }
   // 元の Polygon は削除される
-  // 新しい Group がルートに作成される
+  // wrapInGroup: true → 新しい Group を作成
+  // wrapInGroup: false → donut, inner を元の Polygon の親に直接配置
   // donut = 元ポリゴンに hole を追加したもの（新 id）
   // inner = 穴を埋める新規ポリゴン（新 id）
 ```
@@ -380,12 +385,14 @@ punchHole(
 
 ```
 expandWithPolygon(
-  polygonId  : PolygonID,    // ルートポリゴンのみ。非ルートは NotRootPolygonError
+  polygonId  : PolygonID,    // 任意のポリゴン
   outerPath  : [Point],      // 境界上の点A から外側を経由して点B までのパス
-  childName  : string
-) → { group: Group, original: Polygon, added: Polygon }
+  childName  : string,
+  options?   : { wrapInGroup?: boolean }  // デフォルト: true
+) → { group?: Group, original: Polygon, added: Polygon }
   // 元の Polygon は削除される
-  // 新しい Group がルートに作成される
+  // wrapInGroup: true → 新しい Group を作成
+  // wrapInGroup: false → original, added を元の Polygon の親に直接配置
   // original = 元ポリゴン（id は新規）
   // added = 外側描画した新ポリゴン
 ```
@@ -394,7 +401,7 @@ expandWithPolygon(
 
 ```
 sharedEdgeMove(
-  polygonId : PolygonID,     // ルートポリゴンのみ。非ルートは NotRootPolygonError
+  polygonId : PolygonID,     // 任意のポリゴン
   index     : int,           // 移動する頂点のインデックス
   lat       : float,
   lng       : float
@@ -486,7 +493,6 @@ ChangeSet {
 | `CircularReferenceError` | `moveToGroup` で循環が生じる | `moveToGroup` |
 | `SelfReferenceError` | 自身を自分の親に設定しようとした | `moveToGroup` |
 | `MixedParentError` | `createGroup` の子ノードの親が統一されていない | `createGroup` |
-| `NotRootPolygonError` | ルートポリゴン限定の操作を非ルートポリゴンに対して呼んだ | `updatePolygonGeometry`、`loadPolygonToDraft`、`sharedEdgeMove`、分割系 API |
 | `DraftNotClosedError` | open DraftShape を Polygon として保存しようとした | `saveAsPolygon`、`updatePolygonGeometry` |
 | `InvalidGeometryError` | 自己交差・頂点不足・面積ゼロ | `saveAsPolygon`、`updatePolygonGeometry`、切断系 API |
 | `DraftNotFoundError` | `loadDraftFromStorage` で ID が見つからない | `loadDraftFromStorage` |

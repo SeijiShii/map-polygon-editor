@@ -96,16 +96,6 @@ export class MixedParentError extends Error {
   }
 }
 
-/** Thrown when a root-only operation is called on a non-root polygon. */
-export class NotRootPolygonError extends Error {
-  override name = "NotRootPolygonError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "NotRootPolygonError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
 /** Thrown when a non-closed DraftShape is passed to an API requiring a polygon. */
 export class DraftNotClosedError extends Error {
   override name = "DraftNotClosedError" as const;
