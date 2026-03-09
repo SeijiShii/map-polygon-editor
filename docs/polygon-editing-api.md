@@ -238,7 +238,7 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 | `updatePolygonGeometry(polygonId, draft)` | PolygonID、DraftShape | 既存ポリゴンの geometry を更新 |
 | `renamePolygon(polygonId, name)` | PolygonID、新しい名前 | display_name を変更（ルート制限なし） |
 | `deletePolygon(polygonId)` | PolygonID | Polygon を削除（ルート制限なし）。親 Group の最後の子の場合は `GroupWouldBeEmptyError` |
-| `loadPolygonToDraft(polygonId)` | PolygonID | 保存済みルートポリゴンを DraftShape に変換して編集再開。非ルートは `NotRootPolygonError` |
+| `loadPolygonToDraft(polygonId)` | PolygonID | 保存済みポリゴンを DraftShape に変換して編集再開 |
 
 ### Group 管理
 
