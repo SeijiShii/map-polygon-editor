@@ -694,4 +694,883 @@ describe("MapPolygonEditor", () => {
       expect(editor.canRedo()).toBe(false);
     });
   });
+
+  // ============================================================
+  // Phase 5: getGroupPolygons (Union calculation)
+  // ============================================================
+
+  describe("Phase 5: getGroupPolygons", () => {
+    // Two adjacent squares: [0,0]-[1,1] and [1,0]-[2,1]
+    const leftSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+    };
+    const rightSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [1, 0],
+          [2, 0],
+          [2, 1],
+          [1, 1],
+          [1, 0],
+        ],
+      ],
+    };
+    // Separate square not touching the others
+    const separateSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [10, 10],
+          [11, 10],
+          [11, 11],
+          [10, 11],
+          [10, 10],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: "",
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws GroupNotFoundError for non-existent group", async () => {
+      const { editor } = await createEditor();
+      expect(() => editor.getGroupPolygons(makeGroupID("nope"))).toThrow(
+        GroupNotFoundError,
+      );
+    });
+
+    it("returns empty array for group with no descendant polygons", async () => {
+      // Group with a sub-group but no actual polygons
+      const g1 = makeGroup("g-1");
+      const g2 = makeGroup("g-2", "g-1");
+      const p = makePolygon("p-1"); // root polygon, not in g-1
+      const { editor } = await createEditor([p], [g1, g2]);
+      const result = editor.getGroupPolygons(makeGroupID("g-1"));
+      expect(result).toEqual([]);
+    });
+
+    it("returns single polygon's geometry when group has one child", async () => {
+      const g = makeGroup("g-1");
+      const p = makePolygonWithGeom("p-1", "g-1", leftSquare);
+      const { editor } = await createEditor([p], [g]);
+      const result = editor.getGroupPolygons(makeGroupID("g-1"));
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("Polygon");
+    });
+
+    it("returns union of adjacent polygons as single polygon", async () => {
+      const g = makeGroup("g-1");
+      const p1 = makePolygonWithGeom("p-1", "g-1", leftSquare);
+      const p2 = makePolygonWithGeom("p-2", "g-1", rightSquare);
+      const { editor } = await createEditor([p1, p2], [g]);
+      const result = editor.getGroupPolygons(makeGroupID("g-1"));
+      // Adjacent squares merge into one polygon
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("Polygon");
+    });
+
+    it("returns multiple polygons when descendants are disjoint", async () => {
+      const g = makeGroup("g-1");
+      const p1 = makePolygonWithGeom("p-1", "g-1", leftSquare);
+      const p2 = makePolygonWithGeom("p-2", "g-1", separateSquare);
+      const { editor } = await createEditor([p1, p2], [g]);
+      const result = editor.getGroupPolygons(makeGroupID("g-1"));
+      // Disjoint polygons → MultiPolygon → split into 2 GeoJSON Polygons
+      expect(result).toHaveLength(2);
+      expect(result[0].type).toBe("Polygon");
+      expect(result[1].type).toBe("Polygon");
+    });
+
+    it("includes deeply nested descendant polygons in union", async () => {
+      const g1 = makeGroup("g-1");
+      const g2 = makeGroup("g-2", "g-1");
+      const p1 = makePolygonWithGeom("p-1", "g-1", leftSquare);
+      const p2 = makePolygonWithGeom("p-2", "g-2", rightSquare);
+      const { editor } = await createEditor([p1, p2], [g1, g2]);
+      const result = editor.getGroupPolygons(makeGroupID("g-1"));
+      // p1 is direct child, p2 is grandchild — both included in union
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("Polygon");
+    });
+
+    it("throws NotInitializedError before initialize()", () => {
+      const adapter = createMockAdapter();
+      const editor = new MapPolygonEditor({ storageAdapter: adapter });
+      expect(() => editor.getGroupPolygons(makeGroupID("g-1"))).toThrow(
+        NotInitializedError,
+      );
+    });
+  });
+
+  // ============================================================
+  // Phase 6: sharedEdgeMove (coordinate hash index)
+  // ============================================================
+
+  describe("Phase 6: sharedEdgeMove", () => {
+    // Two adjacent squares sharing edge at x=1
+    // Left: [0,0],[1,0],[1,1],[0,1]  Right: [1,0],[2,0],[2,1],[1,1]
+    const leftSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+    };
+    const rightSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [1, 0],
+          [2, 0],
+          [2, 1],
+          [1, 1],
+          [1, 0],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: "",
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor();
+      await expect(
+        editor.sharedEdgeMove(makePolygonID("nope"), 0, 5, 5),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("moves vertex of target polygon", async () => {
+      const p = makePolygonWithGeom("p-1", null, leftSquare);
+      const { editor } = await createEditor([p]);
+      // Move vertex 1 (which is [1,0] in GeoJSON → index 1) to [1.5, 0]
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        1,
+        0,
+        1.5,
+      );
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      const updated = editor.getPolygon(makePolygonID("p-1"))!;
+      // Vertex at index 1 should be moved to [1.5, 0] (lng=1.5, lat=0)
+      expect(updated.geometry.coordinates[0][1]).toEqual([1.5, 0]);
+    });
+
+    it("moves shared vertices across polygons", async () => {
+      const p1 = makePolygonWithGeom("p-1", null, leftSquare);
+      const p2 = makePolygonWithGeom("p-2", null, rightSquare);
+      const { editor } = await createEditor([p1, p2]);
+      // leftSquare vertex 1 is [1,0], rightSquare vertex 0 is [1,0] — shared
+      // Move p-1 vertex 1 from [1,0] to [1.5, 0]
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        1,
+        0,
+        1.5,
+      );
+      expect(result).toHaveLength(2); // both polygons updated
+      const u1 = editor.getPolygon(makePolygonID("p-1"))!;
+      const u2 = editor.getPolygon(makePolygonID("p-2"))!;
+      expect(u1.geometry.coordinates[0][1]).toEqual([1.5, 0]);
+      // p-2's vertex 0 should also be updated (was [1,0], now [1.5,0])
+      expect(u2.geometry.coordinates[0][0]).toEqual([1.5, 0]);
+      // p-2's closing vertex (index 4) should also be updated
+      expect(u2.geometry.coordinates[0][4]).toEqual([1.5, 0]);
+    });
+
+    it("moves shared vertices across group boundaries", async () => {
+      const g = makeGroup("g-1");
+      const p1 = makePolygonWithGeom("p-1", null, leftSquare);
+      const p2 = makePolygonWithGeom("p-2", "g-1", rightSquare);
+      const { editor } = await createEditor([p1, p2], [g]);
+      // p-1 is root, p-2 is in group g-1. Vertex [1,0] is shared.
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        1,
+        0,
+        1.5,
+      );
+      expect(result).toHaveLength(2);
+      const u2 = editor.getPolygon(makePolygonID("p-2"))!;
+      expect(u2.geometry.coordinates[0][0]).toEqual([1.5, 0]);
+    });
+
+    it("updates duplicate coordinates within same polygon (closing vertex)", async () => {
+      const p = makePolygonWithGeom("p-1", null, leftSquare);
+      const { editor } = await createEditor([p]);
+      // leftSquare: [0,0],[1,0],[1,1],[0,1],[0,0] — vertex 0 and 4 share [0,0]
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        0,
+        0.5,
+        0.5,
+      );
+      expect(result).toHaveLength(1);
+      const updated = editor.getPolygon(makePolygonID("p-1"))!;
+      // Both first and closing vertex should be updated
+      expect(updated.geometry.coordinates[0][0]).toEqual([0.5, 0.5]);
+      expect(updated.geometry.coordinates[0][4]).toEqual([0.5, 0.5]);
+    });
+
+    it("persists changes via storageAdapter.batchWrite", async () => {
+      const p = makePolygonWithGeom("p-1", null, leftSquare);
+      const { editor, adapter } = await createEditor([p]);
+      await editor.sharedEdgeMove(makePolygonID("p-1"), 1, 0, 1.5);
+      expect(adapter.batchWrite).toHaveBeenCalled();
+    });
+
+    it("is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, leftSquare);
+      const { editor } = await createEditor([p]);
+      await editor.sharedEdgeMove(makePolygonID("p-1"), 1, 0, 1.5);
+      await editor.undo();
+      const reverted = editor.getPolygon(makePolygonID("p-1"))!;
+      expect(reverted.geometry.coordinates[0][1]).toEqual([1, 0]);
+    });
+
+    it("does not affect polygons without matching coordinates", async () => {
+      const p1 = makePolygonWithGeom("p-1", null, leftSquare);
+      const farSquare: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [10, 10],
+            [11, 10],
+            [11, 11],
+            [10, 11],
+            [10, 10],
+          ],
+        ],
+      };
+      const p2 = makePolygonWithGeom("p-2", null, farSquare);
+      const { editor } = await createEditor([p1, p2]);
+      const result = await editor.sharedEdgeMove(
+        makePolygonID("p-1"),
+        1,
+        0,
+        1.5,
+      );
+      expect(result).toHaveLength(1); // only p-1 updated
+      const u2 = editor.getPolygon(makePolygonID("p-2"))!;
+      // p-2 should be unchanged
+      expect(u2.geometry.coordinates[0]).toEqual(farSquare.coordinates[0]);
+    });
+  });
+
+  // ============================================================
+  // Phase 7: splitPolygon (cut line intersection)
+  // ============================================================
+
+  describe("Phase 7: splitPolygon", () => {
+    // Unit square: [0,0],[1,0],[1,1],[0,1]
+    const unitSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+      name = "",
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: name,
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor();
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+      await expect(
+        editor.splitPolygon(makePolygonID("nope"), cutLine),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("splits a square into two polygons with a vertical cut", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      // Cut line: vertical line at x=0.5, from below to above the square
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.polygons).toHaveLength(2);
+      // Original polygon should be deleted
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+      // Two new polygons should exist
+      for (const poly of result.polygons) {
+        expect(editor.getPolygon(poly.id)).not.toBeNull();
+      }
+    });
+
+    it("wraps results in group by default (wrapInGroup: true)", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.group).toBeDefined();
+      expect(result.group!.display_name).toBe("Square"); // inherits original name
+      // Both result polygons should be children of the group
+      for (const poly of result.polygons) {
+        expect(poly.parent_id).toBe(result.group!.id);
+      }
+    });
+
+    it("places results at original parent when wrapInGroup: false", async () => {
+      const g = makeGroup("g-1");
+      const p = makePolygonWithGeom("p-1", "g-1", unitSquare);
+      const { editor } = await createEditor([p], [g]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine, {
+        wrapInGroup: false,
+      });
+      expect(result.group).toBeUndefined();
+      for (const poly of result.polygons) {
+        expect(poly.parent_id).toBe(makeGroupID("g-1"));
+      }
+    });
+
+    it("does nothing when cut line has 0 intersections", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor } = await createEditor([p]);
+
+      // Cut line entirely outside
+      const cutLine: DraftShape = {
+        points: [
+          { lat: 5, lng: 5 },
+          { lat: 6, lng: 6 },
+        ],
+        isClosed: false,
+      };
+
+      const result = await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(result.polygons).toHaveLength(0);
+      expect(result.group).toBeUndefined();
+      // Original polygon should be unchanged
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+    });
+
+    it("is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Square");
+      const { editor } = await createEditor([p]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+
+      await editor.undo();
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+    });
+
+    it("persists changes via batchWrite", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor, adapter } = await createEditor([p]);
+
+      const cutLine: DraftShape = {
+        points: [
+          { lat: -1, lng: 0.5 },
+          { lat: 2, lng: 0.5 },
+        ],
+        isClosed: false,
+      };
+
+      await editor.splitPolygon(makePolygonID("p-1"), cutLine);
+      // batchWrite called: once for initialize (no), and once for split
+      expect(adapter.batchWrite).toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================
+  // Phase 8: carveInnerPolygon
+  // ============================================================
+
+  describe("Phase 8: carveInnerPolygon", () => {
+    // Large square: [0,0]-[4,4]
+    const bigSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [4, 0],
+          [4, 4],
+          [0, 4],
+          [0, 0],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+      name = "",
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: name,
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor();
+      const loop = [
+        { lat: 0, lng: 0 },
+        { lat: 0, lng: 2 },
+        { lat: 2, lng: 2 },
+        { lat: 0, lng: 0 },
+      ];
+      await expect(
+        editor.carveInnerPolygon(makePolygonID("nope"), loop),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("carves inner polygon from boundary vertex loop", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare, "Big");
+      const { editor } = await createEditor([p]);
+
+      // Loop starts and ends at [0,0] (a boundary vertex), goes into interior
+      const loop = [
+        { lat: 0, lng: 0 },
+        { lat: 0, lng: 2 },
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 0 },
+        { lat: 0, lng: 0 },
+      ];
+
+      const result = await editor.carveInnerPolygon(makePolygonID("p-1"), loop);
+      expect(result.outer).toBeDefined();
+      expect(result.inner).toBeDefined();
+      // Original polygon deleted
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+      // Two new polygons exist
+      expect(editor.getPolygon(result.outer.id)).not.toBeNull();
+      expect(editor.getPolygon(result.inner.id)).not.toBeNull();
+    });
+
+    it("wraps results in group by default", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare, "Big");
+      const { editor } = await createEditor([p]);
+
+      const loop = [
+        { lat: 0, lng: 0 },
+        { lat: 0, lng: 2 },
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 0 },
+        { lat: 0, lng: 0 },
+      ];
+
+      const result = await editor.carveInnerPolygon(makePolygonID("p-1"), loop);
+      expect(result.group).toBeDefined();
+      expect(result.group!.display_name).toBe("Big");
+      expect(result.outer.parent_id).toBe(result.group!.id);
+      expect(result.inner.parent_id).toBe(result.group!.id);
+    });
+
+    it("places at original parent when wrapInGroup: false", async () => {
+      const g = makeGroup("g-1");
+      const p = makePolygonWithGeom("p-1", "g-1", bigSquare);
+      const { editor } = await createEditor([p], [g]);
+
+      const loop = [
+        { lat: 0, lng: 0 },
+        { lat: 0, lng: 2 },
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 0 },
+        { lat: 0, lng: 0 },
+      ];
+
+      const result = await editor.carveInnerPolygon(
+        makePolygonID("p-1"),
+        loop,
+        { wrapInGroup: false },
+      );
+      expect(result.group).toBeUndefined();
+      expect(result.outer.parent_id).toBe(makeGroupID("g-1"));
+      expect(result.inner.parent_id).toBe(makeGroupID("g-1"));
+    });
+
+    it("is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare);
+      const { editor } = await createEditor([p]);
+
+      const loop = [
+        { lat: 0, lng: 0 },
+        { lat: 0, lng: 2 },
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 0 },
+        { lat: 0, lng: 0 },
+      ];
+
+      await editor.carveInnerPolygon(makePolygonID("p-1"), loop);
+      await editor.undo();
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+    });
+  });
+
+  // ============================================================
+  // Phase 9: punchHole
+  // ============================================================
+
+  describe("Phase 9: punchHole", () => {
+    const bigSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10],
+          [0, 0],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+      name = "",
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: name,
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor();
+      const hole = [
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 4 },
+        { lat: 4, lng: 4 },
+        { lat: 4, lng: 2 },
+        { lat: 2, lng: 2 },
+      ];
+      await expect(
+        editor.punchHole(makePolygonID("nope"), hole),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("punches hole and creates donut + inner polygon", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare, "Big");
+      const { editor } = await createEditor([p]);
+
+      // Hole completely inside the big square
+      const hole = [
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 4 },
+        { lat: 4, lng: 4 },
+        { lat: 4, lng: 2 },
+        { lat: 2, lng: 2 },
+      ];
+
+      const result = await editor.punchHole(makePolygonID("p-1"), hole);
+      expect(result.donut).toBeDefined();
+      expect(result.inner).toBeDefined();
+      // Original polygon deleted
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+      // Donut should have a hole (2 rings)
+      expect(result.donut.geometry.coordinates.length).toBe(2);
+      // Inner polygon fills the hole
+      expect(result.inner.geometry.coordinates.length).toBe(1);
+    });
+
+    it("wraps results in group by default", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare, "Big");
+      const { editor } = await createEditor([p]);
+
+      const hole = [
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 4 },
+        { lat: 4, lng: 4 },
+        { lat: 4, lng: 2 },
+        { lat: 2, lng: 2 },
+      ];
+
+      const result = await editor.punchHole(makePolygonID("p-1"), hole);
+      expect(result.group).toBeDefined();
+      expect(result.group!.display_name).toBe("Big");
+      expect(result.donut.parent_id).toBe(result.group!.id);
+      expect(result.inner.parent_id).toBe(result.group!.id);
+    });
+
+    it("places at original parent when wrapInGroup: false", async () => {
+      const g = makeGroup("g-1");
+      const p = makePolygonWithGeom("p-1", "g-1", bigSquare);
+      const { editor } = await createEditor([p], [g]);
+
+      const hole = [
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 4 },
+        { lat: 4, lng: 4 },
+        { lat: 4, lng: 2 },
+        { lat: 2, lng: 2 },
+      ];
+
+      const result = await editor.punchHole(makePolygonID("p-1"), hole, {
+        wrapInGroup: false,
+      });
+      expect(result.group).toBeUndefined();
+      expect(result.donut.parent_id).toBe(makeGroupID("g-1"));
+      expect(result.inner.parent_id).toBe(makeGroupID("g-1"));
+    });
+
+    it("is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, bigSquare);
+      const { editor } = await createEditor([p]);
+
+      const hole = [
+        { lat: 2, lng: 2 },
+        { lat: 2, lng: 4 },
+        { lat: 4, lng: 4 },
+        { lat: 4, lng: 2 },
+        { lat: 2, lng: 2 },
+      ];
+
+      await editor.punchHole(makePolygonID("p-1"), hole);
+      await editor.undo();
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+    });
+  });
+
+  // ============================================================
+  // Phase 10: expandWithPolygon
+  // ============================================================
+
+  describe("Phase 10: expandWithPolygon", () => {
+    const unitSquare: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+    };
+
+    function makePolygonWithGeom(
+      id: string,
+      parentId: string | null,
+      geom: GeoJSONPolygon,
+      name = "",
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: geom,
+        display_name: name,
+        parent_id: parentId ? makeGroupID(parentId) : null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor();
+      const outerPath = [
+        { lat: 0, lng: 1 },
+        { lat: 0, lng: 2 },
+        { lat: 1, lng: 2 },
+        { lat: 1, lng: 1 },
+      ];
+      await expect(
+        editor.expandWithPolygon(makePolygonID("nope"), outerPath, "added"),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("creates original + added polygon from outer path", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Original");
+      const { editor } = await createEditor([p]);
+
+      // Outer path: from [1,0] along outside to [1,1]
+      // Forms a new square adjacent to the right edge
+      const outerPath = [
+        { lat: 0, lng: 1 },
+        { lat: 0, lng: 2 },
+        { lat: 1, lng: 2 },
+        { lat: 1, lng: 1 },
+      ];
+
+      const result = await editor.expandWithPolygon(
+        makePolygonID("p-1"),
+        outerPath,
+        "Extension",
+      );
+      expect(result.original).toBeDefined();
+      expect(result.added).toBeDefined();
+      expect(result.added.display_name).toBe("Extension");
+      // Original polygon deleted, replaced with new id
+      expect(editor.getPolygon(makePolygonID("p-1"))).toBeNull();
+      expect(editor.getPolygon(result.original.id)).not.toBeNull();
+      expect(editor.getPolygon(result.added.id)).not.toBeNull();
+    });
+
+    it("wraps results in group by default", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare, "Original");
+      const { editor } = await createEditor([p]);
+
+      const outerPath = [
+        { lat: 0, lng: 1 },
+        { lat: 0, lng: 2 },
+        { lat: 1, lng: 2 },
+        { lat: 1, lng: 1 },
+      ];
+
+      const result = await editor.expandWithPolygon(
+        makePolygonID("p-1"),
+        outerPath,
+        "Extension",
+      );
+      expect(result.group).toBeDefined();
+      expect(result.group!.display_name).toBe("Original");
+      expect(result.original.parent_id).toBe(result.group!.id);
+      expect(result.added.parent_id).toBe(result.group!.id);
+    });
+
+    it("places at original parent when wrapInGroup: false", async () => {
+      const g = makeGroup("g-1");
+      const p = makePolygonWithGeom("p-1", "g-1", unitSquare);
+      const { editor } = await createEditor([p], [g]);
+
+      const outerPath = [
+        { lat: 0, lng: 1 },
+        { lat: 0, lng: 2 },
+        { lat: 1, lng: 2 },
+        { lat: 1, lng: 1 },
+      ];
+
+      const result = await editor.expandWithPolygon(
+        makePolygonID("p-1"),
+        outerPath,
+        "Extension",
+        { wrapInGroup: false },
+      );
+      expect(result.group).toBeUndefined();
+      expect(result.original.parent_id).toBe(makeGroupID("g-1"));
+      expect(result.added.parent_id).toBe(makeGroupID("g-1"));
+    });
+
+    it("is undoable", async () => {
+      const p = makePolygonWithGeom("p-1", null, unitSquare);
+      const { editor } = await createEditor([p]);
+
+      const outerPath = [
+        { lat: 0, lng: 1 },
+        { lat: 0, lng: 2 },
+        { lat: 1, lng: 2 },
+        { lat: 1, lng: 1 },
+      ];
+
+      await editor.expandWithPolygon(
+        makePolygonID("p-1"),
+        outerPath,
+        "Extension",
+      );
+      await editor.undo();
+      expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
+    });
+  });
 });

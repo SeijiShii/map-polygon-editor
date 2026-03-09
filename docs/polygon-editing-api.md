@@ -228,7 +228,7 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 | `getAllPolygons()` | — | `Polygon[]` | 全 Polygon を取得 |
 | `getAllGroups()` | — | `Group[]` | 全 Group を取得 |
 | `getDescendantPolygons(groupId)` | GroupID | `Polygon[]` | グループ配下の全 Polygon を再帰取得（geometry 計算なし） |
-| `getGroupPolygons(groupId)` | GroupID | `GeoJSON Polygon[]` | **未実装** — グループの外周ポリゴンをリストで取得（子を再帰収集し Union を計算。@turf/turf 導入が必要） |
+| `getGroupPolygons(groupId)` | GroupID | `GeoJSON Polygon[]` | グループの外周ポリゴンをリストで取得（子を再帰収集し Union を計算） |
 
 ### Polygon 保存・編集
 
@@ -309,7 +309,7 @@ moveToGroup(
 - 移動後に旧親グループの子が0件になる → GroupWouldBeEmptyError
 ```
 
-### 切断線（Cut Line）による分割 — 未実装
+### 切断線（Cut Line）による分割
 
 切断線は**ポリゴンの外側から引き、辺と交差させる**ことで分割を発動する。
 
@@ -349,7 +349,7 @@ splitPolygon(
   // 各 Polygon の id は自動生成、display_name は空
 ```
 
-### 内側ループによる操作 — 未実装
+### 内側ループによる操作
 
 #### carveInnerPolygon（境界頂点からのティアドロップ型ループ）
 
@@ -381,7 +381,7 @@ punchHole(
   // inner = 穴を埋める新規ポリゴン（新 id）
 ```
 
-### 外側描画 → ポリゴン追加 + グループ化 — 未実装
+### 外側描画 → ポリゴン追加 + グループ化
 
 ```
 expandWithPolygon(
@@ -397,7 +397,7 @@ expandWithPolygon(
   // added = 外側描画した新ポリゴン
 ```
 
-### 共有境界の連動編集 — 未実装
+### 共有境界の連動編集
 
 ```
 sharedEdgeMove(

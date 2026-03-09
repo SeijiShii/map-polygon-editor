@@ -18,6 +18,14 @@ import { GroupStore } from "./group-store/group-store.js";
 import { DraftStore } from "./draft/draft-store.js";
 import { validateDraft as validateDraftFn } from "./draft/validate-draft.js";
 import { draftToGeoJSON } from "./draft/draft-operations.js";
+import { union } from "@turf/union";
+import {
+  polygon as turfPolygon,
+  lineString as turfLineString,
+  featureCollection,
+} from "@turf/helpers";
+import { lineIntersect } from "@turf/line-intersect";
+import { intersection as polyClipIntersection } from "polyclip-ts";
 import {
   NotInitializedError,
   StorageError,
@@ -51,6 +59,9 @@ export class MapPolygonEditor {
 
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
+
+  /** Coordinate hash index: "lng,lat" → Set of PolygonIDs that have a vertex there */
+  private coordIndex = new Map<string, Set<PolygonID>>();
 
   constructor(config: MapPolygonEditorConfig) {
     this.storageAdapter = config.storageAdapter;
@@ -87,6 +98,7 @@ export class MapPolygonEditor {
     }
 
     this.validateDataIntegrity();
+    this.rebuildCoordIndex();
     this.initialized = true;
   }
 
@@ -168,6 +180,600 @@ export class MapPolygonEditor {
     }
   }
 
+  getGroupPolygons(groupId: GroupID): GeoJSONPolygon[] {
+    this.guard();
+    const group = this.groupStore.get(groupId);
+    if (!group) throw new GroupNotFoundError(`Group "${groupId}" not found`);
+
+    const descendants = this.getDescendantPolygons(groupId);
+    if (descendants.length === 0) return [];
+
+    if (descendants.length === 1) {
+      return [descendants[0].geometry];
+    }
+
+    // Compute union of all descendant geometries using @turf/turf
+    const features = descendants.map((d) =>
+      turfPolygon(d.geometry.coordinates),
+    );
+    const merged = union(featureCollection(features));
+    if (!merged) return [];
+
+    // If the union produces a MultiPolygon, split into individual Polygon features
+    if (merged.geometry.type === "MultiPolygon") {
+      return merged.geometry.coordinates.map(
+        (coords): GeoJSONPolygon => ({
+          type: "Polygon",
+          coordinates: coords,
+        }),
+      );
+    }
+
+    return [
+      {
+        type: "Polygon",
+        coordinates: merged.geometry.coordinates as number[][][],
+      },
+    ];
+  }
+
+  // ============================================================
+  // Shared Edge Move
+  // ============================================================
+
+  async sharedEdgeMove(
+    polygonId: PolygonID,
+    index: number,
+    lat: number,
+    lng: number,
+  ): Promise<MapPolygon[]> {
+    this.guard();
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    const coords = polygon.geometry.coordinates[0];
+    const oldCoord = coords[index];
+    if (!oldCoord) {
+      throw new PolygonNotFoundError(
+        `Vertex index ${index} out of range for polygon "${polygonId}"`,
+      );
+    }
+
+    const [oldLng, oldLat] = oldCoord;
+    const key = this.coordKey(oldLng, oldLat);
+    const affectedIds = this.coordIndex.get(key);
+
+    // Collect all polygons that share this coordinate
+    const polygonIdsToUpdate = affectedIds ? [...affectedIds] : [polygonId];
+
+    const modifiedPolygons: Array<{ before: MapPolygon; after: MapPolygon }> =
+      [];
+    const updatedPolygons: MapPolygon[] = [];
+
+    for (const pid of polygonIdsToUpdate) {
+      const p = this.polygonStore.get(pid);
+      if (!p) continue;
+
+      const before = {
+        ...p,
+        geometry: {
+          ...p.geometry,
+          coordinates: [...p.geometry.coordinates.map((ring) => [...ring])],
+        },
+      };
+      const newCoords = p.geometry.coordinates[0].map((c) =>
+        c[0] === oldLng && c[1] === oldLat ? [lng, lat] : [...c],
+      );
+      const newGeometry: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [newCoords],
+      };
+      const after: MapPolygon = {
+        ...p,
+        geometry: newGeometry,
+        updated_at: new Date(),
+      };
+
+      // Update coordinate index
+      this.unindexPolygon(p);
+      this.polygonStore.update(after);
+      this.indexPolygon(after);
+
+      modifiedPolygons.push({ before, after });
+      updatedPolygons.push(after);
+    }
+
+    this.pushHistory({
+      createdPolygons: [],
+      deletedPolygons: [],
+      modifiedPolygons,
+      createdGroups: [],
+      deletedGroups: [],
+      modifiedGroups: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons: [],
+      deletedPolygonIds: [],
+      modifiedPolygons: updatedPolygons,
+      createdGroups: [],
+      deletedGroupIds: [],
+      modifiedGroups: [],
+    });
+
+    return updatedPolygons;
+  }
+
+  // ============================================================
+  // Expand With Polygon
+  // ============================================================
+
+  async expandWithPolygon(
+    polygonId: PolygonID,
+    outerPath: { lat: number; lng: number }[],
+    childName: string,
+    options?: { wrapInGroup?: boolean },
+  ): Promise<{ group?: Group; original: MapPolygon; added: MapPolygon }> {
+    this.guard();
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    const wrapInGroup = options?.wrapInGroup ?? true;
+
+    // Build added polygon from outer path
+    const addedCoords = outerPath.map(
+      (p) => [p.lng, p.lat] as [number, number],
+    );
+    // Ensure closure
+    if (
+      addedCoords[0][0] !== addedCoords[addedCoords.length - 1][0] ||
+      addedCoords[0][1] !== addedCoords[addedCoords.length - 1][1]
+    ) {
+      addedCoords.push([...addedCoords[0]] as [number, number]);
+    }
+
+    // Delete original polygon
+    this.unindexPolygon(polygon);
+    this.polygonStore.delete(polygonId);
+
+    const now = new Date();
+    const originalParentId = polygon.parent_id;
+    let createdGroup: Group | undefined;
+
+    const parentId = wrapInGroup
+      ? (() => {
+          const group: Group = {
+            id: makeGroupID(crypto.randomUUID()),
+            display_name: polygon.display_name,
+            parent_id: originalParentId,
+            created_at: now,
+            updated_at: now,
+          };
+          this.groupStore.add(group);
+          createdGroup = group;
+          return group.id;
+        })()
+      : originalParentId;
+
+    // Create new polygon with original geometry (new id)
+    const originalPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: polygon.geometry,
+      display_name: polygon.display_name,
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(originalPoly);
+    this.indexPolygon(originalPoly);
+
+    // Create added polygon
+    const addedPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: { type: "Polygon", coordinates: [addedCoords] },
+      display_name: childName,
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(addedPoly);
+    this.indexPolygon(addedPoly);
+
+    const createdPolygons = [originalPoly, addedPoly];
+
+    this.pushHistory({
+      createdPolygons,
+      deletedPolygons: [polygon],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroups: [],
+      modifiedGroups: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons,
+      deletedPolygonIds: [polygonId],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroupIds: [],
+      modifiedGroups: [],
+    });
+
+    return {
+      ...(createdGroup ? { group: createdGroup } : {}),
+      original: originalPoly,
+      added: addedPoly,
+    };
+  }
+
+  // ============================================================
+  // Punch Hole
+  // ============================================================
+
+  async punchHole(
+    polygonId: PolygonID,
+    holePath: { lat: number; lng: number }[],
+    options?: { wrapInGroup?: boolean },
+  ): Promise<{ group?: Group; donut: MapPolygon; inner: MapPolygon }> {
+    this.guard();
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    const wrapInGroup = options?.wrapInGroup ?? true;
+
+    // Build hole coordinates
+    const holeCoords = holePath.map((p) => [p.lng, p.lat] as [number, number]);
+    if (
+      holeCoords[0][0] !== holeCoords[holeCoords.length - 1][0] ||
+      holeCoords[0][1] !== holeCoords[holeCoords.length - 1][1]
+    ) {
+      holeCoords.push([...holeCoords[0]] as [number, number]);
+    }
+
+    // Donut = outer ring + hole as inner ring
+    const outerRing = polygon.geometry.coordinates[0];
+    const donutCoords: number[][][] = [outerRing, holeCoords];
+
+    // Delete original polygon
+    this.unindexPolygon(polygon);
+    this.polygonStore.delete(polygonId);
+
+    const now = new Date();
+    const originalParentId = polygon.parent_id;
+    let createdGroup: Group | undefined;
+
+    const parentId = wrapInGroup
+      ? (() => {
+          const group: Group = {
+            id: makeGroupID(crypto.randomUUID()),
+            display_name: polygon.display_name,
+            parent_id: originalParentId,
+            created_at: now,
+            updated_at: now,
+          };
+          this.groupStore.add(group);
+          createdGroup = group;
+          return group.id;
+        })()
+      : originalParentId;
+
+    // Create donut polygon
+    const donutPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: { type: "Polygon", coordinates: donutCoords },
+      display_name: "",
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(donutPoly);
+    this.indexPolygon(donutPoly);
+
+    // Create inner polygon (fills the hole)
+    const innerPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: { type: "Polygon", coordinates: [holeCoords] },
+      display_name: "",
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(innerPoly);
+    this.indexPolygon(innerPoly);
+
+    const createdPolygons = [donutPoly, innerPoly];
+
+    this.pushHistory({
+      createdPolygons,
+      deletedPolygons: [polygon],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroups: [],
+      modifiedGroups: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons,
+      deletedPolygonIds: [polygonId],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroupIds: [],
+      modifiedGroups: [],
+    });
+
+    return {
+      ...(createdGroup ? { group: createdGroup } : {}),
+      donut: donutPoly,
+      inner: innerPoly,
+    };
+  }
+
+  // ============================================================
+  // Carve Inner Polygon
+  // ============================================================
+
+  async carveInnerPolygon(
+    polygonId: PolygonID,
+    loopPath: { lat: number; lng: number }[],
+    options?: { wrapInGroup?: boolean },
+  ): Promise<{ group?: Group; outer: MapPolygon; inner: MapPolygon }> {
+    this.guard();
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    const wrapInGroup = options?.wrapInGroup ?? true;
+    const polyCoords = polygon.geometry.coordinates;
+
+    // Build inner polygon from loop path
+    const innerCoords = loopPath.map((p) => [p.lng, p.lat] as [number, number]);
+    // Ensure closure
+    if (
+      innerCoords[0][0] !== innerCoords[innerCoords.length - 1][0] ||
+      innerCoords[0][1] !== innerCoords[innerCoords.length - 1][1]
+    ) {
+      innerCoords.push([...innerCoords[0]] as [number, number]);
+    }
+
+    // Compute outer = original - inner using polyclip-ts difference
+    const { difference: polyClipDifference } = await import("polyclip-ts");
+    const outerResult = polyClipDifference(polyCoords as [number, number][][], [
+      innerCoords,
+    ]);
+
+    // Delete original polygon
+    this.unindexPolygon(polygon);
+    this.polygonStore.delete(polygonId);
+
+    const now = new Date();
+    const originalParentId = polygon.parent_id;
+    let createdGroup: Group | undefined;
+
+    const parentId = wrapInGroup
+      ? (() => {
+          const group: Group = {
+            id: makeGroupID(crypto.randomUUID()),
+            display_name: polygon.display_name,
+            parent_id: originalParentId,
+            created_at: now,
+            updated_at: now,
+          };
+          this.groupStore.add(group);
+          createdGroup = group;
+          return group.id;
+        })()
+      : originalParentId;
+
+    // Create outer polygon
+    const outerPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: {
+        type: "Polygon",
+        coordinates: outerResult.length > 0 ? outerResult[0] : polyCoords,
+      },
+      display_name: "",
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(outerPoly);
+    this.indexPolygon(outerPoly);
+
+    // Create inner polygon
+    const innerPoly: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: { type: "Polygon", coordinates: [innerCoords] },
+      display_name: "",
+      parent_id: parentId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.polygonStore.add(innerPoly);
+    this.indexPolygon(innerPoly);
+
+    const createdPolygons = [outerPoly, innerPoly];
+
+    this.pushHistory({
+      createdPolygons,
+      deletedPolygons: [polygon],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroups: [],
+      modifiedGroups: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons,
+      deletedPolygonIds: [polygonId],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroupIds: [],
+      modifiedGroups: [],
+    });
+
+    return {
+      ...(createdGroup ? { group: createdGroup } : {}),
+      outer: outerPoly,
+      inner: innerPoly,
+    };
+  }
+
+  // ============================================================
+  // Split Polygon
+  // ============================================================
+
+  async splitPolygon(
+    polygonId: PolygonID,
+    draft: DraftShape,
+    options?: { wrapInGroup?: boolean },
+  ): Promise<{ group?: Group; polygons: MapPolygon[] }> {
+    this.guard();
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    const wrapInGroup = options?.wrapInGroup ?? true;
+
+    // Build turf features
+    const polyCoords = polygon.geometry.coordinates;
+    const polyFeature = turfPolygon(polyCoords);
+    const lineCoords = draft.points.map(
+      (p) => [p.lng, p.lat] as [number, number],
+    );
+    const lineFeature = turfLineString(lineCoords);
+
+    // Find intersections of cut line with polygon boundary
+    const intersections = lineIntersect(polyFeature, lineFeature);
+    const numIntersections = intersections.features.length;
+
+    if (numIntersections < 2) {
+      // 0 intersections: no-op; 1 intersection: vertex insertion only (future)
+      return { polygons: [] };
+    }
+
+    // Split the polygon using half-plane approach
+    // Compute the perpendicular normal of the cut line
+    const [x1, y1] = lineCoords[0];
+    const [x2, y2] = lineCoords[lineCoords.length - 1];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const nx = -dy / len;
+    const ny = dx / len;
+    const offset = 1000; // large enough to cover any polygon
+
+    // Build half-plane polygons
+    const leftHalf: number[][] = [
+      [x1, y1],
+      [x2, y2],
+      [x2 + nx * offset, y2 + ny * offset],
+      [x1 + nx * offset, y1 + ny * offset],
+      [x1, y1],
+    ];
+    const rightHalf: number[][] = [
+      [x1, y1],
+      [x2, y2],
+      [x2 - nx * offset, y2 - ny * offset],
+      [x1 - nx * offset, y1 - ny * offset],
+      [x1, y1],
+    ];
+
+    const leftResult = polyClipIntersection(
+      polyCoords as [number, number][][],
+      [leftHalf as [number, number][]],
+    );
+    const rightResult = polyClipIntersection(
+      polyCoords as [number, number][][],
+      [rightHalf as [number, number][]],
+    );
+
+    // Collect all result polygons
+    const resultCoords: number[][][][] = [];
+    for (const poly of leftResult) resultCoords.push(poly);
+    for (const poly of rightResult) resultCoords.push(poly);
+
+    if (resultCoords.length < 2) {
+      // Cut line doesn't effectively divide the polygon
+      return { polygons: [] };
+    }
+
+    // Delete the original polygon
+    this.unindexPolygon(polygon);
+    this.polygonStore.delete(polygonId);
+
+    const now = new Date();
+    const originalParentId = polygon.parent_id;
+    const createdPolygons: MapPolygon[] = [];
+    let createdGroup: Group | undefined;
+
+    if (wrapInGroup) {
+      // Create a wrapper group
+      const group: Group = {
+        id: makeGroupID(crypto.randomUUID()),
+        display_name: polygon.display_name,
+        parent_id: originalParentId,
+        created_at: now,
+        updated_at: now,
+      };
+      this.groupStore.add(group);
+      createdGroup = group;
+
+      for (const coords of resultCoords) {
+        const newPoly: MapPolygon = {
+          id: makePolygonID(crypto.randomUUID()),
+          geometry: { type: "Polygon", coordinates: coords },
+          display_name: "",
+          parent_id: group.id,
+          created_at: now,
+          updated_at: now,
+        };
+        this.polygonStore.add(newPoly);
+        this.indexPolygon(newPoly);
+        createdPolygons.push(newPoly);
+      }
+    } else {
+      for (const coords of resultCoords) {
+        const newPoly: MapPolygon = {
+          id: makePolygonID(crypto.randomUUID()),
+          geometry: { type: "Polygon", coordinates: coords },
+          display_name: "",
+          parent_id: originalParentId,
+          created_at: now,
+          updated_at: now,
+        };
+        this.polygonStore.add(newPoly);
+        this.indexPolygon(newPoly);
+        createdPolygons.push(newPoly);
+      }
+    }
+
+    this.pushHistory({
+      createdPolygons,
+      deletedPolygons: [polygon],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroups: [],
+      modifiedGroups: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons,
+      deletedPolygonIds: [polygonId],
+      modifiedPolygons: [],
+      createdGroups: createdGroup ? [createdGroup] : [],
+      deletedGroupIds: [],
+      modifiedGroups: [],
+    });
+
+    return {
+      ...(createdGroup ? { group: createdGroup } : {}),
+      polygons: createdPolygons,
+    };
+  }
+
   validateDraft(draft: DraftShape): GeometryViolation[] {
     this.guard();
     return validateDraftFn(draft);
@@ -203,6 +809,7 @@ export class MapPolygonEditor {
     };
 
     this.polygonStore.add(polygon);
+    this.indexPolygon(polygon);
 
     const entry: HistoryEntry = {
       createdPolygons: [polygon],
@@ -271,6 +878,7 @@ export class MapPolygonEditor {
       this.checkGroupWouldBeEmpty(polygon.parent_id, polygonId, null);
     }
 
+    this.unindexPolygon(polygon);
     this.polygonStore.delete(polygonId);
 
     this.pushHistory({
@@ -324,7 +932,9 @@ export class MapPolygonEditor {
     const geometry = draftToGeoJSON(draft) as GeoJSONPolygon;
     const before = { ...polygon };
     const after: MapPolygon = { ...polygon, geometry, updated_at: new Date() };
+    this.unindexPolygon(polygon);
     this.polygonStore.update(after);
+    this.indexPolygon(after);
 
     this.pushHistory({
       createdPolygons: [],
@@ -744,12 +1354,21 @@ export class MapPolygonEditor {
     const entry = this.undoStack.pop();
     if (!entry) return;
 
-    for (const p of entry.createdPolygons) this.polygonStore.delete(p.id);
+    for (const p of entry.createdPolygons) {
+      this.unindexPolygon(p);
+      this.polygonStore.delete(p.id);
+    }
     for (const g of entry.createdGroups) this.groupStore.delete(g.id);
-    for (const p of entry.deletedPolygons) this.polygonStore.add(p);
+    for (const p of entry.deletedPolygons) {
+      this.polygonStore.add(p);
+      this.indexPolygon(p);
+    }
     for (const g of entry.deletedGroups) this.groupStore.add(g);
-    for (const { before } of entry.modifiedPolygons)
+    for (const { before, after } of entry.modifiedPolygons) {
+      this.unindexPolygon(after);
       this.polygonStore.update(before);
+      this.indexPolygon(before);
+    }
     for (const { before } of entry.modifiedGroups)
       this.groupStore.update(before);
 
@@ -770,12 +1389,21 @@ export class MapPolygonEditor {
     const entry = this.redoStack.pop();
     if (!entry) return;
 
-    for (const p of entry.createdPolygons) this.polygonStore.add(p);
+    for (const p of entry.createdPolygons) {
+      this.polygonStore.add(p);
+      this.indexPolygon(p);
+    }
     for (const g of entry.createdGroups) this.groupStore.add(g);
-    for (const p of entry.deletedPolygons) this.polygonStore.delete(p.id);
+    for (const p of entry.deletedPolygons) {
+      this.unindexPolygon(p);
+      this.polygonStore.delete(p.id);
+    }
     for (const g of entry.deletedGroups) this.groupStore.delete(g.id);
-    for (const { after } of entry.modifiedPolygons)
+    for (const { before, after } of entry.modifiedPolygons) {
+      this.unindexPolygon(before);
       this.polygonStore.update(after);
+      this.indexPolygon(after);
+    }
     for (const { after } of entry.modifiedGroups) this.groupStore.update(after);
 
     this.undoStack.push(entry);
@@ -801,6 +1429,46 @@ export class MapPolygonEditor {
   // ============================================================
   // Helpers
   // ============================================================
+
+  // ============================================================
+  // Coordinate Hash Index
+  // ============================================================
+
+  private coordKey(lng: number, lat: number): string {
+    return `${lng},${lat}`;
+  }
+
+  private indexPolygon(polygon: MapPolygon): void {
+    const coords = polygon.geometry.coordinates[0];
+    for (const [lng, lat] of coords) {
+      const key = this.coordKey(lng, lat);
+      let set = this.coordIndex.get(key);
+      if (!set) {
+        set = new Set();
+        this.coordIndex.set(key, set);
+      }
+      set.add(polygon.id);
+    }
+  }
+
+  private unindexPolygon(polygon: MapPolygon): void {
+    const coords = polygon.geometry.coordinates[0];
+    for (const [lng, lat] of coords) {
+      const key = this.coordKey(lng, lat);
+      const set = this.coordIndex.get(key);
+      if (set) {
+        set.delete(polygon.id);
+        if (set.size === 0) this.coordIndex.delete(key);
+      }
+    }
+  }
+
+  private rebuildCoordIndex(): void {
+    this.coordIndex.clear();
+    for (const p of this.polygonStore.getAll()) {
+      this.indexPolygon(p);
+    }
+  }
 
   private checkGroupWouldBeEmpty(
     groupId: GroupID,

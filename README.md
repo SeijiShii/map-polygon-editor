@@ -50,18 +50,15 @@ Terra Draw  flutter_map  Google Maps
 
 ## ステータス
 
-v2 コア実装完了。267 テスト通過、カバレッジ 93%。
+v2 全 API 実装完了。299 テスト通過。
 
 ### 実装済み
 
 - 型システム（PolygonID / GroupID / DraftID ブランド型）
 - PolygonStore / GroupStore（デュアルインデックス）
-- MapPolygonEditor ファサード（初期化・クエリ・CRUD・グループ管理・Undo/Redo・ドラフト永続化）
+- MapPolygonEditor ファサード（全 API）
 - DraftShape 操作（描画・検証・GeoJSON 変換）
-- エラー体系（13 エラークラス）
-
-### 未実装（仕様策定済み）
-
+- エラー体系（12 エラークラス）
 - ジオメトリ演算: `splitPolygon`, `carveInnerPolygon`, `punchHole`, `expandWithPolygon`
-- 共有境界連動: `sharedEdgeMove`（座標ハッシュインデックス含む）
-- グループ外周取得: `getGroupPolygons`（Union 計算）
+- 共有境界連動: `sharedEdgeMove`（座標ハッシュインデックス）
+- グループ外周取得: `getGroupPolygons`（@turf/turf Union 計算）
