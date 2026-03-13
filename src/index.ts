@@ -1,11 +1,10 @@
 // Core types
 export type {
   PolygonID,
-  GroupID,
+  UnionCacheID,
   DraftID,
   GeoJSONPolygon,
   MapPolygon,
-  Group,
   Point,
   DraftShape,
   PersistedDraft,
@@ -15,7 +14,7 @@ export type {
   GeometryViolation,
   GeometryViolationCode,
 } from "./types/index.js";
-export { makePolygonID, makeGroupID, makeDraftID } from "./types/index.js";
+export { makePolygonID, makeUnionCacheID, makeDraftID } from "./types/index.js";
 
 // Error classes
 export {
@@ -23,11 +22,6 @@ export {
   DataIntegrityError,
   StorageError,
   PolygonNotFoundError,
-  GroupNotFoundError,
-  GroupWouldBeEmptyError,
-  CircularReferenceError,
-  SelfReferenceError,
-  MixedParentError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
@@ -35,7 +29,6 @@ export {
 
 // Stores
 export { PolygonStore } from "./polygon-store/polygon-store.js";
-export { GroupStore } from "./group-store/group-store.js";
 export { DraftStore } from "./draft/draft-store.js";
 
 // Draft operations (pure functions)
@@ -52,6 +45,9 @@ export {
 
 // Draft validation
 export { validateDraft } from "./draft/validate-draft.js";
+
+// Geometry utilities
+export { computeUnion } from "./geometry/compute-union.js";
 
 // Editor facade
 export { MapPolygonEditor } from "./editor.js";

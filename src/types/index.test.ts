@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type {
   PolygonID,
-  GroupID,
+  UnionCacheID,
   DraftID,
   GeoJSONPolygon,
   MapPolygon,
-  Group,
   Point,
   DraftShape,
   PersistedDraft,
@@ -17,7 +16,7 @@ import type {
 } from "./index.js";
 import {
   makePolygonID,
-  makeGroupID,
+  makeUnionCacheID,
   makeDraftID,
 } from "./index.js";
 
@@ -31,11 +30,11 @@ describe("types", () => {
       expect(_check).toBe("p-1");
     });
 
-    it("makeGroupID creates a GroupID", () => {
-      const id = makeGroupID("g-1");
-      expect(id).toBe("g-1");
-      const _check: GroupID = id;
-      expect(_check).toBe("g-1");
+    it("makeUnionCacheID creates a UnionCacheID", () => {
+      const id = makeUnionCacheID("uc-1");
+      expect(id).toBe("uc-1");
+      const _check: UnionCacheID = id;
+      expect(_check).toBe("uc-1");
     });
 
     it("makeDraftID creates a DraftID", () => {
@@ -53,14 +52,12 @@ describe("types", () => {
         id: makePolygonID("p-1"),
         geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
         display_name: "Test Polygon",
-        parent_id: null,
         created_at: now,
         updated_at: now,
       };
       expect(polygon.id).toBe("p-1");
       expect(polygon.geometry.type).toBe("Polygon");
       expect(polygon.display_name).toBe("Test Polygon");
-      expect(polygon.parent_id).toBeNull();
       expect(polygon.metadata).toBeUndefined();
     });
 
@@ -70,42 +67,11 @@ describe("types", () => {
         id: makePolygonID("p-2"),
         geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
         display_name: "",
-        parent_id: makeGroupID("g-1"),
         metadata: { source: "import", originalId: "ext-123" },
         created_at: now,
         updated_at: now,
       };
       expect(polygon.metadata?.source).toBe("import");
-      expect(polygon.parent_id).toBe("g-1");
-    });
-  });
-
-  describe("Group type structure", () => {
-    it("has all required fields", () => {
-      const now = new Date();
-      const group: Group = {
-        id: makeGroupID("g-1"),
-        display_name: "Tokyo",
-        parent_id: null,
-        created_at: now,
-        updated_at: now,
-      };
-      expect(group.id).toBe("g-1");
-      expect(group.display_name).toBe("Tokyo");
-      expect(group.parent_id).toBeNull();
-    });
-
-    it("supports nested groups via parent_id", () => {
-      const now = new Date();
-      const group: Group = {
-        id: makeGroupID("g-2"),
-        display_name: "Shibuya",
-        parent_id: makeGroupID("g-1"),
-        metadata: { level: "city" },
-        created_at: now,
-        updated_at: now,
-      };
-      expect(group.parent_id).toBe("g-1");
     });
   });
 
@@ -132,46 +98,41 @@ describe("types", () => {
   });
 
   describe("ChangeSet type", () => {
-    it("has separate polygon and group fields", () => {
+    it("has polygon fields only", () => {
       const cs: ChangeSet = {
         createdPolygons: [],
         deletedPolygonIds: [],
         modifiedPolygons: [],
-        createdGroups: [],
-        deletedGroupIds: [],
-        modifiedGroups: [],
       };
       expect(cs.createdPolygons).toEqual([]);
-      expect(cs.deletedGroupIds).toEqual([]);
+      expect(cs.deletedPolygonIds).toEqual([]);
+      expect(cs.modifiedPolygons).toEqual([]);
     });
   });
 
   describe("HistoryEntry type", () => {
-    it("has separate polygon and group fields", () => {
+    it("has polygon fields only", () => {
       const entry: HistoryEntry = {
         createdPolygons: [],
         deletedPolygons: [],
         modifiedPolygons: [],
-        createdGroups: [],
-        deletedGroups: [],
-        modifiedGroups: [],
       };
       expect(entry.createdPolygons).toEqual([]);
-      expect(entry.modifiedGroups).toEqual([]);
+      expect(entry.deletedPolygons).toEqual([]);
+      expect(entry.modifiedPolygons).toEqual([]);
     });
   });
 
   describe("StorageAdapter interface", () => {
-    it("loadAll returns polygons, groups, and drafts", async () => {
+    it("loadAll returns polygons and drafts", async () => {
       const adapter: StorageAdapter = {
-        loadAll: async () => ({ polygons: [], groups: [], drafts: [] }),
+        loadAll: async () => ({ polygons: [], drafts: [] }),
         batchWrite: async () => {},
         saveDraft: async () => {},
         deleteDraft: async () => {},
       };
       const result = await adapter.loadAll();
       expect(result).toHaveProperty("polygons");
-      expect(result).toHaveProperty("groups");
       expect(result).toHaveProperty("drafts");
     });
   });

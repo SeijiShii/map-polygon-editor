@@ -1,5 +1,5 @@
 /**
- * All domain error classes for map-polygon-editor v2.
+ * All domain error classes for map-polygon-editor.
  *
  * Each class:
  * - Extends Error
@@ -42,56 +42,6 @@ export class PolygonNotFoundError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PolygonNotFoundError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when a referenced GroupID does not exist. */
-export class GroupNotFoundError extends Error {
-  override name = "GroupNotFoundError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "GroupNotFoundError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when an operation would leave a group with zero children. */
-export class GroupWouldBeEmptyError extends Error {
-  override name = "GroupWouldBeEmptyError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "GroupWouldBeEmptyError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when moveToGroup would create a circular ancestor chain. */
-export class CircularReferenceError extends Error {
-  override name = "CircularReferenceError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "CircularReferenceError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when a node is set as its own parent. */
-export class SelfReferenceError extends Error {
-  override name = "SelfReferenceError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "SelfReferenceError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-/** Thrown when createGroup receives children with different parent_ids. */
-export class MixedParentError extends Error {
-  override name = "MixedParentError" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "MixedParentError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

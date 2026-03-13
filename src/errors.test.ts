@@ -4,11 +4,6 @@ import {
   DataIntegrityError,
   StorageError,
   PolygonNotFoundError,
-  GroupNotFoundError,
-  GroupWouldBeEmptyError,
-  CircularReferenceError,
-  SelfReferenceError,
-  MixedParentError,
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
@@ -20,18 +15,13 @@ describe("v2 error classes", () => {
     ["DataIntegrityError", DataIntegrityError],
     ["StorageError", StorageError],
     ["PolygonNotFoundError", PolygonNotFoundError],
-    ["GroupNotFoundError", GroupNotFoundError],
-    ["GroupWouldBeEmptyError", GroupWouldBeEmptyError],
-    ["CircularReferenceError", CircularReferenceError],
-    ["SelfReferenceError", SelfReferenceError],
-    ["MixedParentError", MixedParentError],
     ["DraftNotClosedError", DraftNotClosedError],
     ["InvalidGeometryError", InvalidGeometryError],
     ["DraftNotFoundError", DraftNotFoundError],
   ];
 
-  it("has exactly 12 error classes", () => {
-    expect(errorCases).toHaveLength(12);
+  it("has exactly 7 error classes", () => {
+    expect(errorCases).toHaveLength(7);
   });
 
   for (const [name, ErrorClass] of errorCases) {
@@ -86,19 +76,9 @@ describe("v2 error classes", () => {
   });
 
   describe("different error types are distinct classes", () => {
-    it("PolygonNotFoundError is not instanceof GroupNotFoundError", () => {
-      const err = new PolygonNotFoundError("p-1 not found");
-      expect(err).not.toBeInstanceOf(GroupNotFoundError);
-    });
-
     it("DraftNotFoundError is not instanceof PolygonNotFoundError", () => {
       const err = new DraftNotFoundError("draft not found");
       expect(err).not.toBeInstanceOf(PolygonNotFoundError);
-    });
-
-    it("GroupWouldBeEmptyError is not instanceof MixedParentError", () => {
-      const err = new GroupWouldBeEmptyError("would be empty");
-      expect(err).not.toBeInstanceOf(MixedParentError);
     });
   });
 });

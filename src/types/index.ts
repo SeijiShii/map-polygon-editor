@@ -1,8 +1,8 @@
 // PolygonID — opaque string alias
 export type PolygonID = string & { readonly __brand: "PolygonID" };
 
-// GroupID — opaque string alias
-export type GroupID = string & { readonly __brand: "GroupID" };
+// UnionCacheID — opaque string alias for cached union results
+export type UnionCacheID = string & { readonly __brand: "UnionCacheID" };
 
 // DraftID — opaque string alias for persisted draft IDs
 export type DraftID = string & { readonly __brand: "DraftID" };
@@ -11,8 +11,8 @@ export function makePolygonID(raw: string): PolygonID {
   return raw as PolygonID;
 }
 
-export function makeGroupID(raw: string): GroupID {
-  return raw as GroupID;
+export function makeUnionCacheID(raw: string): UnionCacheID {
+  return raw as UnionCacheID;
 }
 
 export function makeDraftID(raw: string): DraftID {
@@ -30,17 +30,6 @@ export interface MapPolygon {
   id: PolygonID;
   geometry: GeoJSONPolygon;
   display_name: string;
-  parent_id: GroupID | null;
-  metadata?: Record<string, unknown>;
-  created_at: Date;
-  updated_at: Date;
-}
-
-// Group — a logical container (no geometry)
-export interface Group {
-  id: GroupID;
-  display_name: string;
-  parent_id: GroupID | null;
   metadata?: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
@@ -63,9 +52,6 @@ export interface ChangeSet {
   createdPolygons: MapPolygon[];
   deletedPolygonIds: PolygonID[];
   modifiedPolygons: MapPolygon[];
-  createdGroups: Group[];
-  deletedGroupIds: GroupID[];
-  modifiedGroups: Group[];
 }
 
 // HistoryEntry — used for undo/redo
@@ -73,9 +59,6 @@ export interface HistoryEntry {
   createdPolygons: MapPolygon[];
   deletedPolygons: MapPolygon[];
   modifiedPolygons: Array<{ before: MapPolygon; after: MapPolygon }>;
-  createdGroups: Group[];
-  deletedGroups: Group[];
-  modifiedGroups: Array<{ before: Group; after: Group }>;
 }
 
 // GeometryViolation — returned by validateDraft
@@ -102,7 +85,6 @@ export interface PersistedDraft {
 export interface StorageAdapter {
   loadAll(): Promise<{
     polygons: MapPolygon[];
-    groups: Group[];
     drafts: PersistedDraft[];
   }>;
   batchWrite(changes: ChangeSet): Promise<void>;

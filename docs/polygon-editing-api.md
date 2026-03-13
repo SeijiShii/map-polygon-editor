@@ -14,7 +14,7 @@ initialize(): Promise<void>
 
 `initialize()` を呼ぶと以下を実行する：
 
-1. `storageAdapter.loadAll()` を呼び出し、全 Polygon・Group・PersistedDraft をメモリに展開する
+1. `storageAdapter.loadAll()` を呼び出し、全 Polygon・PersistedDraft をメモリに展開する
 2. データ整合性を検証する
 
 失敗した場合は例外を投げる（アプリ側でエラーハンドリングが必要）。
@@ -130,32 +130,27 @@ deleteDraftFromStorage(id: DraftID) → Promise<void>
 
 ### Polygon の編集制約
 
-**PolygonID を持つ個々の Polygon（葉ノード）は、ツリー内の位置を問わず全て編集可能。**
-`getGroupPolygons` で返される外周ポリゴンは計算結果（GeoJSON のみ）であり、読み取り専用。
+**PolygonID を持つ個々の Polygon は全て編集可能。**
 
 | 操作 | 制約 |
 |------|------|
 | 新規描画 → `saveAsPolygon` | 常にルートとして作成 |
 | `loadPolygonToDraft` | 任意の Polygon |
 | `updatePolygonGeometry` | 任意の Polygon |
-| `splitPolygon` | 任意の Polygon。`wrapInGroup` オプションで結果配置を選択 |
-| `carveInnerPolygon` | 任意の Polygon。`wrapInGroup` オプション |
-| `punchHole` | 任意の Polygon。`wrapInGroup` オプション |
-| `expandWithPolygon` | 任意の Polygon。`wrapInGroup` オプション |
+| `splitPolygon` | 任意の Polygon |
+| `carveInnerPolygon` | 任意の Polygon |
+| `punchHole` | 任意の Polygon |
+| `expandWithPolygon` | 任意の Polygon |
 | `sharedEdgeMove` | 任意の Polygon。影響は全ポリゴンに及ぶ |
 | `renamePolygon` | 任意の Polygon |
-| `deletePolygon` | 任意の Polygon。親 Group の最後の子の場合は `GroupWouldBeEmptyError` |
+| `deletePolygon` | 任意の Polygon |
 
 ### 新規描画
 
-`saveAsPolygon` は常にルートポリゴンとして作成する。`parentId` パラメータは持たない。
-
 ```
 saveAsPolygon(draft: DraftShape, name: string) → Polygon
-  // 常に parent_id = null のルートポリゴンとして保存
+  // ルートポリゴンとして保存
 ```
-
-グループへの所属は `createGroup` や `moveToGroup` で後から行う。
 
 ### 頂点削除時の挙動
 
@@ -169,14 +164,12 @@ after:   A ──────── C    A と C が直結
 ### sharedEdgeMove の影響範囲
 
 sharedEdgeMove は任意のポリゴンに対して呼び出せる。影響は**全ポリゴン**に及ぶ。
-グループの境界を問わず、同座標（epsilon 以内）の頂点を持つ全ポリゴンが連動更新される。
+同座標（epsilon 以内）の頂点を持つ全ポリゴンが連動更新される。
 
 ```
-Group A
-  ├── Polygon X (頂点 P を持つ)  ← sharedEdgeMove で P を移動
-  └── Polygon Y (頂点 P を持つ)
-
-Polygon Z（ルート、頂点 P を持つ）
+Polygon X (頂点 P を持つ)  ← sharedEdgeMove で P を移動
+Polygon Y (頂点 P を持つ)
+Polygon Z (頂点 P を持つ)
 
 → X, Y, Z 全てで頂点 P が連動更新される
 ```
@@ -193,7 +186,7 @@ Polygon Z（ルート、頂点 P を持つ）
 
 ### 削除の注意
 
-ルートポリゴン・グループとも削除可能。有用なデータの喪失を防ぐため、
+ポリゴンは削除可能。有用なデータの喪失を防ぐため、
 **アプリ層で削除確認 UI を実装する**ことを推奨する。ライブラリ側では確認を行わない。
 
 ---
@@ -216,19 +209,14 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 | `openDraft(draft)` | DraftShape | ポリラインに戻す |
 | `draftToGeoJSON(draft)` | DraftShape | GeoJSON Polygon / LineString に変換 |
 | `validateDraft(draft)` | DraftShape | geometry を検証し、違反リストを返す |
+| `computeUnion(polygons)` | GeoJSON Polygon[] | ポリゴン群の union を計算し GeoJSON Polygon[] を返す |
 
 ### クエリ（全てインメモリ・同期）
 
 | メソッド | 引数 | 戻り値 | 説明 |
 |----------|------|--------|------|
 | `getPolygon(id)` | PolygonID | `Polygon \| null` | ID で Polygon を取得 |
-| `getGroup(id)` | GroupID | `Group \| null` | ID で Group を取得 |
-| `getChildren(groupId)` | GroupID | `(Polygon \| Group)[]` | 直接の子を全て取得 |
-| `getRoots()` | — | `(Polygon \| Group)[]` | `parent_id` が null のノードを全て取得 |
 | `getAllPolygons()` | — | `Polygon[]` | 全 Polygon を取得 |
-| `getAllGroups()` | — | `Group[]` | 全 Group を取得 |
-| `getDescendantPolygons(groupId)` | GroupID | `Polygon[]` | グループ配下の全 Polygon を再帰取得（geometry 計算なし） |
-| `getGroupPolygons(groupId)` | GroupID | `GeoJSON Polygon[]` | グループの外周ポリゴンをリストで取得（子を再帰収集し Union を計算） |
 
 ### Polygon 保存・編集
 
@@ -236,78 +224,9 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 |----------|------|------|
 | `saveAsPolygon(draft, name)` | DraftShape、名称 | DraftShape をルートポリゴンとして保存 |
 | `updatePolygonGeometry(polygonId, draft)` | PolygonID、DraftShape | 既存ポリゴンの geometry を更新 |
-| `renamePolygon(polygonId, name)` | PolygonID、新しい名前 | display_name を変更（ルート制限なし） |
-| `deletePolygon(polygonId)` | PolygonID | Polygon を削除（ルート制限なし）。親 Group の最後の子の場合は `GroupWouldBeEmptyError` |
+| `renamePolygon(polygonId, name)` | PolygonID、新しい名前 | display_name を変更 |
+| `deletePolygon(polygonId)` | PolygonID | Polygon を削除 |
 | `loadPolygonToDraft(polygonId)` | PolygonID | 保存済みポリゴンを DraftShape に変換して編集再開 |
-
-### Group 管理
-
-| メソッド | 引数 | 説明 |
-|----------|------|------|
-| `createGroup(name, childIds)` | 名称、子ID配列 | 既存のポリゴン/グループをまとめて新グループを作成 |
-| `renameGroup(groupId, name)` | GroupID、新しい名前 | display_name を変更 |
-| `deleteGroup(groupId, options?)` | GroupID、`{ cascade?: bool }` | グループを削除（後述） |
-| `moveToGroup(nodeId, newParentId?)` | PolygonID \| GroupID、新親GroupID \| null | 親グループを変更する |
-| `ungroupChildren(groupId)` | GroupID | グループを解消し、子を親グループに昇格させる |
-
-#### createGroup の挙動
-
-```
-createGroup(
-  name     : string,
-  childIds : (PolygonID | GroupID)[]   // 1つ以上必須
-) → Group
-```
-
-- `childIds` の各ノードを新グループの子に移動する
-- 各ノードの `parent_id` を新グループの ID に更新する
-- 新グループの `parent_id` は、`childIds` の元の共通の `parent_id` を引き継ぐ
-  - 元の `parent_id` が統一されていない場合は `MixedParentError`
-- `childIds` が空の場合は `GroupWouldBeEmptyError`
-
-#### deleteGroup の挙動
-
-```
-deleteGroup(
-  groupId  : GroupID,
-  options? : { cascade?: bool }   // デフォルト: { cascade: false }
-) → void
-```
-
-| オプション | 挙動 |
-|-----------|------|
-| `cascade: false`（デフォルト） | グループを削除し、子を親グループ（または root）に昇格させる |
-| `cascade: true` | グループと全子孫を再帰削除 |
-
-`cascade: false` の場合、削除後に旧親グループが空になるかをチェックし、
-空になる場合は旧親も連鎖的に削除して子を上位に昇格させる。
-
-#### ungroupChildren の挙動
-
-```
-ungroupChildren(groupId: GroupID) → void
-```
-
-- グループの全ての子を、グループの親（または root）に移動する
-- グループ自体を削除する
-- `deleteGroup(groupId, { cascade: false })` と同義
-
-#### moveToGroup の挙動
-
-```
-moveToGroup(
-  nodeId      : PolygonID | GroupID,
-  newParentId : GroupID | null        // null = ルートに移動
-) → void
-```
-
-**検証ルール：**
-
-```
-- nodeId と newParentId が同じ → SelfReferenceError
-- newParentId が nodeId の子孫 → CircularReferenceError
-- 移動後に旧親グループの子が0件になる → GroupWouldBeEmptyError
-```
 
 ### 切断線（Cut Line）による分割
 
@@ -339,13 +258,9 @@ moveToGroup(
 ```
 splitPolygon(
   polygonId : PolygonID,     // 任意のポリゴン
-  draft     : DraftShape,    // isClosed = false。ヒゲ込みで渡してよい
-  options?  : { wrapInGroup?: boolean }  // デフォルト: true
-) → { group?: Group, polygons: Polygon[] }
+  draft     : DraftShape     // isClosed = false。ヒゲ込みで渡してよい
+) → MapPolygon[]
   // 元の Polygon は削除される
-  // wrapInGroup: true → 新しい Group を元の Polygon の位置に作成し、分割結果を子にする
-  //   Group の display_name は元の Polygon の display_name を引き継ぐ
-  // wrapInGroup: false → 分割結果を元の Polygon の親に直接配置（Group は作成しない）
   // 各 Polygon の id は自動生成、display_name は空
 ```
 
@@ -356,12 +271,9 @@ splitPolygon(
 ```
 carveInnerPolygon(
   polygonId : PolygonID,     // 任意のポリゴン
-  loopPath  : [Point],       // 始点 = 終点 = 境界頂点
-  options?  : { wrapInGroup?: boolean }  // デフォルト: true
-) → { group?: Group, outer: Polygon, inner: Polygon }
+  loopPath  : [Point]        // 始点 = 終点 = 境界頂点
+) → { outer: Polygon, inner: Polygon }
   // 元の Polygon は削除される
-  // wrapInGroup: true → 新しい Group を作成し outer + inner を子に持つ
-  // wrapInGroup: false → outer, inner を元の Polygon の親に直接配置
   // outer = 元ポリゴンからループを除いた残り（C字型など）
   // inner = ループ内側の新ポリゴン
 ```
@@ -371,28 +283,22 @@ carveInnerPolygon(
 ```
 punchHole(
   polygonId : PolygonID,     // 任意のポリゴン
-  holePath  : [Point],       // 境界に触れない完全内側の閉じたループ
-  options?  : { wrapInGroup?: boolean }  // デフォルト: true
-) → { group?: Group, donut: Polygon, inner: Polygon }
+  holePath  : [Point]        // 境界に触れない完全内側の閉じたループ
+) → { donut: Polygon, inner: Polygon }
   // 元の Polygon は削除される
-  // wrapInGroup: true → 新しい Group を作成
-  // wrapInGroup: false → donut, inner を元の Polygon の親に直接配置
   // donut = 元ポリゴンに hole を追加したもの（新 id）
   // inner = 穴を埋める新規ポリゴン（新 id）
 ```
 
-### 外側描画 → ポリゴン追加 + グループ化
+### 外側描画 → ポリゴン追加
 
 ```
 expandWithPolygon(
   polygonId  : PolygonID,    // 任意のポリゴン
   outerPath  : [Point],      // 境界上の点A から外側を経由して点B までのパス
-  childName  : string,
-  options?   : { wrapInGroup?: boolean }  // デフォルト: true
-) → { group?: Group, original: Polygon, added: Polygon }
+  childName  : string
+) → { original: Polygon, added: Polygon }
   // 元の Polygon は削除される
-  // wrapInGroup: true → 新しい Group を作成
-  // wrapInGroup: false → original, added を元の Polygon の親に直接配置
   // original = 元ポリゴン（id は新規）
   // added = 外側描画した新ポリゴン
 ```
@@ -408,8 +314,41 @@ sharedEdgeMove(
 ) → Polygon[]  // 更新された全ポリゴン（連動したものを含む）
 ```
 
-指定ポリゴンの頂点を移動し、**全ポリゴン**（グループ内を含む）から
+指定ポリゴンの頂点を移動し、**全ポリゴン**から
 同座標（epsilon 以内）の頂点を検索して連動更新する。
+
+### 外輪郭キャッシュ（Union Cache）
+
+指定したポリゴン群の外輪郭（union）を計算し、結果をキャッシュする仕組み。
+インメモリのみで動作し、StorageAdapter には影響しない。
+
+```
+computeUnion(polygonIds: PolygonID[]) → UnionCacheID
+  // 指定ポリゴン群の外輪郭（union）を計算し、キャッシュに登録
+  // 戻り値の UnionCacheID でキャッシュを参照する
+
+computeUnionFromCaches(cacheIds: UnionCacheID[]) → UnionCacheID
+  // 既存キャッシュの結果を組み合わせて外輪郭を算出し、新しいキャッシュとして登録
+  // ソースキャッシュが dirty なら先に再計算してから union を算出
+  // カスケーディング dirty 伝播: ソースポリゴン変更 → リーフキャッシュ dirty → 親キャッシュも dirty
+
+getCachedUnion(cacheId: UnionCacheID) → GeoJSONPolygon[] | null
+  // キャッシュされた union 結果を取得
+  // dirty な場合は自動再計算（リーフ: ポリゴンから、複合: 子キャッシュから）
+  // 存在しない cacheId の場合は null
+
+deleteCachedUnion(cacheId: UnionCacheID) → void
+  // キャッシュを削除（子キャッシュは残る）
+```
+
+**設計方針：**
+
+- インメモリのみ（StorageAdapter に影響なし）
+- ポリゴン変更・削除時に関連キャッシュを自動 dirty 化
+- dirty 伝播はカスケーディング: リーフ → 中間 → トップへと伝播
+- `getCachedUnion` 呼び出し時に dirty なら再計算（遅延再計算）
+- 多段階の階層に対応（例: リーフ → エリアグループ → 市区全体）
+- 純粋関数 `computeUnion` (from `geometry/compute-union`) も別途エクスポートされる（上記 DraftShape 操作テーブル参照）
 
 ### Undo / Redo
 
@@ -427,9 +366,6 @@ HistoryEntry {
   createdPolygons : [Polygon]
   deletedPolygons : [Polygon]                          // 完全なスナップショット
   modifiedPolygons: [{ before: Polygon, after: Polygon }]
-  createdGroups   : [Group]
-  deletedGroups   : [Group]
-  modifiedGroups  : [{ before: Group, after: Group }]
 }
 ```
 
@@ -453,7 +389,7 @@ canRedo()  → bool
 
 ```
 interface StorageAdapter {
-  loadAll(): Promise<{ polygons: Polygon[], groups: Group[], drafts: PersistedDraft[] }>
+  loadAll(): Promise<{ polygons: Polygon[], drafts: PersistedDraft[] }>
   batchWrite(changes: ChangeSet): Promise<void>
   saveDraft(draft: PersistedDraft): Promise<void>
   deleteDraft(id: DraftID): Promise<void>
@@ -463,9 +399,6 @@ ChangeSet {
   createdPolygons  : [Polygon]
   deletedPolygonIds: [PolygonID]
   modifiedPolygons : [Polygon]        // after のみ
-  createdGroups    : [Group]
-  deletedGroupIds  : [GroupID]
-  modifiedGroups   : [Group]          // after のみ
 }
 ```
 
@@ -488,11 +421,6 @@ ChangeSet {
 | `DataIntegrityError` | `loadAll()` で読み込んだデータに不整合 | `initialize()` |
 | `StorageError` | `batchWrite` / `loadAll` の失敗 | `initialize()`、各編集 API |
 | `PolygonNotFoundError` | 指定した PolygonID が存在しない | 参照型 API |
-| `GroupNotFoundError` | 指定した GroupID が存在しない | 参照型 API |
-| `GroupWouldBeEmptyError` | 操作の結果、グループの子が0件になる | `deletePolygon`、`moveToGroup` |
-| `CircularReferenceError` | `moveToGroup` で循環が生じる | `moveToGroup` |
-| `SelfReferenceError` | 自身を自分の親に設定しようとした | `moveToGroup` |
-| `MixedParentError` | `createGroup` の子ノードの親が統一されていない | `createGroup` |
 | `DraftNotClosedError` | open DraftShape を Polygon として保存しようとした | `saveAsPolygon`、`updatePolygonGeometry` |
 | `InvalidGeometryError` | 自己交差・頂点不足・面積ゼロ | `saveAsPolygon`、`updatePolygonGeometry`、切断系 API |
 | `DraftNotFoundError` | `loadDraftFromStorage` で ID が見つからない | `loadDraftFromStorage` |
