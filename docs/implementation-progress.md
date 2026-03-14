@@ -23,8 +23,8 @@
 ## テスト状況
 
 ```
-Test Files  8 passed (8)
-     Tests  307 passed (307)
+Test Files  7 passed (7)
+     Tests  220 passed (220)
 ```
 
 ---
@@ -35,36 +35,37 @@ Test Files  8 passed (8)
 
 | モジュール | テスト数 | 備考 |
 |-----------|---------|------|
-| `src/types/index.ts` | 14 | Polygon, Group, PolygonID, GroupID, ChangeSet, HistoryEntry 等 |
-| `src/errors.ts` | 66 | 12 エラークラス |
-| `src/polygon-store/` | 14 | PolygonStore（byId + byParent デュアルインデックス） |
-| `src/group-store/` | 13 | GroupStore（同上） |
-| `src/editor.ts` | 102 | MapPolygonEditor ファサード（全 API 実装済み） |
+| `src/types/index.ts` | 13 | Polygon, PolygonID, UnionCacheID, ChangeSet, HistoryEntry 等 |
+| `src/errors.ts` | 38 | 7 エラークラス |
+| `src/polygon-store/` | 8 | PolygonStore（byId インデックス） |
+| `src/geometry/compute-union.ts` | — | 純粋関数（Editor テストでカバー） |
+| `src/editor.ts` | 63 | MapPolygonEditor ファサード（全 API 実装済み） |
 | `src/draft/draft-operations.ts` | 42 | v1 から流用 |
 | `src/draft/validate-draft.ts` | 27 | v1 から流用 |
 | `src/draft/draft-store.ts` | 29 | v1 から流用 |
 
 ### Editor API 実装状況
 
-| API | 状態 | テスト数 |
-|-----|------|---------|
-| 初期化 + クエリ | ✅ 完了 | Phase 1 |
-| Polygon CRUD | ✅ 完了 | Phase 2 |
-| Group 管理 | ✅ 完了 | Phase 3 |
-| Draft 永続化 + Undo/Redo | ✅ 完了 | Phase 4 |
-| `getGroupPolygons` | ✅ 完了 | Phase 5 (6 tests) |
-| `sharedEdgeMove` | ✅ 完了 | Phase 6 (9 tests) |
-| `splitPolygon` | ✅ 完了 | Phase 7 (12 tests) |
-| `carveInnerPolygon` | ✅ 完了 | Phase 8 (5 tests) |
-| `punchHole` | ✅ 完了 | Phase 9 (5 tests) |
-| `expandWithPolygon` | ✅ 完了 | Phase 10 (5 tests) |
+| API | 状態 | 備考 |
+|-----|------|------|
+| 初期化 + クエリ | ✅ 完了 | |
+| Polygon CRUD | ✅ 完了 | |
+| Draft 永続化 + Undo/Redo | ✅ 完了 | |
+| `sharedEdgeMove` | ✅ 完了 | |
+| `splitPolygon` | ✅ 完了 | |
+| `carveInnerPolygon` | ✅ 完了 | |
+| `punchHole` | ✅ 完了 | |
+| `expandWithPolygon` | ✅ 完了 | |
+| Union Cache（基本） | ✅ 完了 | computeUnion, getCachedUnion, deleteCachedUnion |
+| Union Cache（階層） | ✅ 完了 | computeUnionFromCaches, カスケーディング dirty 伝播 |
 
-### 削除済み（v1 モジュール）
+### 削除済みモジュール
 
 | モジュール | 備考 |
 |-----------|------|
 | `src/area-level/` | AreaLevelStore, AreaLevelValidator — AreaLevel 概念廃止 |
-| `src/area-store/` | AreaStore — Polygon+Group モデルに分離 |
+| `src/area-store/` | AreaStore — Polygon モデルに統合 |
+| `src/group-store/` | GroupStore — Group 概念廃止（アプリ層に委譲） |
 
 ---
 
@@ -73,7 +74,8 @@ Test Files  8 passed (8)
 | 日付 | 内容 |
 |------|------|
 | 2026-02-20 | v1: 初期実装（478テスト） |
-| 2026-03-09 | v2 仕様策定: Area+AreaLevel → Polygon+Group モデルへの移行を決定 |
-| 2026-03-09 | v2 実装完了: 型・エラー・Store・Editor 全面書き換え（267テスト、カバレッジ93%） |
-| 2026-03-09 | v2 ジオメトリ API 実装: getGroupPolygons, sharedEdgeMove, splitPolygon, carveInnerPolygon, punchHole, expandWithPolygon（299テスト） |
-| 2026-03-09 | splitPolygon 強化: ヒゲ自動除去、1交差頂点挿入、2N交差マルチセグメント分割。sharedEdgeMove epsilon比較（307テスト） |
+| 2026-03-09 | v2 仕様策定: Area+AreaLevel → Polygon モデルへの移行を決定 |
+| 2026-03-09 | v2 実装完了: 型・エラー・Store・Editor 全面書き換え |
+| 2026-03-09 | v2 ジオメトリ API 実装: sharedEdgeMove, splitPolygon, carveInnerPolygon, punchHole, expandWithPolygon |
+| 2026-03-09 | splitPolygon 強化: ヒゲ自動除去、1交差頂点挿入、2N交差マルチセグメント分割。sharedEdgeMove epsilon比較 |
+| 2026-03-14 | Group 概念廃止: アプリ層に委譲。Union Cache API 追加（基本＋階層キャッシュ、カスケーディング dirty 伝播）。220テスト |

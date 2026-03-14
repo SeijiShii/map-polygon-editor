@@ -347,7 +347,7 @@ deleteCachedUnion(cacheId: UnionCacheID) → void
 - ポリゴン変更・削除時に関連キャッシュを自動 dirty 化
 - dirty 伝播はカスケーディング: リーフ → 中間 → トップへと伝播
 - `getCachedUnion` 呼び出し時に dirty なら再計算（遅延再計算）
-- 多段階の階層に対応（例: リーフ → エリアグループ → 市区全体）
+- 多段階の階層に対応（例: リーフ → 区キャッシュ → 市区全体）
 - 純粋関数 `computeUnion` (from `geometry/compute-union`) も別途エクスポートされる（上記 DraftShape 操作テーブル参照）
 
 ### Undo / Redo
