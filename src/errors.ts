@@ -66,6 +66,16 @@ export class InvalidGeometryError extends Error {
   }
 }
 
+/** Thrown when two polygons share no vertices and cannot be bridged. */
+export class NoSharedEdgeError extends Error {
+  override name = "NoSharedEdgeError" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "NoSharedEdgeError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when `loadDraftFromStorage` is called with an ID that does not exist. */
 export class DraftNotFoundError extends Error {
   override name = "DraftNotFoundError" as const;

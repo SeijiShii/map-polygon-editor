@@ -25,6 +25,13 @@ import { lineIntersect } from "@turf/line-intersect";
 import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { intersection as polyClipIntersection } from "polyclip-ts";
 import { computeUnion } from "./geometry/compute-union.js";
+import { computeBridgePolygon } from "./geometry/bridge-polygon.js";
+import {
+  buildConnectivityGraph,
+  findLoop,
+  extractLoopRing,
+} from "./geometry/detect-loop.js";
+import type { DraftEndpoint } from "./geometry/detect-loop.js";
 import {
   NotInitializedError,
   StorageError,
@@ -33,6 +40,10 @@ import {
   InvalidGeometryError,
   DraftNotFoundError,
 } from "./errors.js";
+
+export type BridgeResult =
+  | { ok: true; polygon: MapPolygon }
+  | { ok: false; draft: PersistedDraft };
 
 interface CachedUnion {
   id: UnionCacheID;
@@ -63,6 +74,9 @@ export class MapPolygonEditor {
   /** Coordinate hash index: quantized "gx,gy" → Set of PolygonIDs that have a vertex in that cell */
   private coordIndex = new Map<string, Set<PolygonID>>();
   private readonly coordEpsilon = 1e-8;
+
+  /** Draft endpoint index: quantized "gx,gy" → Set of DraftIDs that have an endpoint in that cell */
+  private draftEndpointIndex = new Map<string, Set<DraftID>>();
 
   /** Union cache */
   private unionCache = new Map<UnionCacheID, CachedUnion>();
@@ -101,6 +115,7 @@ export class MapPolygonEditor {
     }
 
     this.rebuildCoordIndex();
+    this.rebuildDraftEndpointIndex();
     this.initialized = true;
   }
 
@@ -465,6 +480,117 @@ export class MapPolygonEditor {
       original: originalPoly,
       added: addedPoly,
     };
+  }
+
+  // ============================================================
+  // Bridge Polygons
+  // ============================================================
+
+  async bridgePolygons(
+    polygonAId: PolygonID,
+    aVertexIndex: number,
+    polygonBId: PolygonID,
+    bVertexIndex: number,
+    bridgePath: { lat: number; lng: number }[],
+    name: string,
+  ): Promise<BridgeResult> {
+    this.guard();
+
+    const polyA = this.polygonStore.get(polygonAId);
+    if (!polyA)
+      throw new PolygonNotFoundError(`Polygon "${polygonAId}" not found`);
+
+    const polyB = this.polygonStore.get(polygonBId);
+    if (!polyB)
+      throw new PolygonNotFoundError(`Polygon "${polygonBId}" not found`);
+
+    const ringA = polyA.geometry.coordinates[0]!;
+    const ringB = polyB.geometry.coordinates[0]!;
+
+    // Convert bridge path to [lng, lat] format
+    const bridgeLine = bridgePath.map((p) => [p.lng, p.lat]);
+
+    const closedRing = computeBridgePolygon(
+      ringA,
+      ringB,
+      aVertexIndex,
+      bVertexIndex,
+      bridgeLine,
+      this.coordEpsilon,
+    );
+
+    // If no shared vertices, try loop detection through existing drafts
+    if (closedRing === null) {
+      const loopResult = this.detectAndBuildLoop(bridgeLine);
+      if (loopResult) {
+        // Loop found — create polygon and delete consumed drafts
+        const now = new Date();
+        const polygon: MapPolygon = {
+          id: makePolygonID(crypto.randomUUID()),
+          geometry: { type: "Polygon", coordinates: [loopResult.ring] },
+          display_name: name,
+          created_at: now,
+          updated_at: now,
+        };
+
+        this.polygonStore.add(polygon);
+        this.indexPolygon(polygon);
+
+        this.pushHistory({
+          createdPolygons: [polygon],
+          deletedPolygons: [],
+          modifiedPolygons: [],
+        });
+
+        await this.storageAdapter.batchWrite({
+          createdPolygons: [polygon],
+          deletedPolygonIds: [],
+          modifiedPolygons: [],
+        });
+
+        // Delete consumed drafts
+        for (const draftId of loopResult.consumedDraftIds) {
+          await this.deleteDraftFromStorage(draftId);
+        }
+
+        return { ok: true, polygon };
+      }
+
+      // No loop — save as draft
+      const draft = {
+        points: bridgePath.map((p) => ({ lat: p.lat, lng: p.lng })),
+        isClosed: false,
+      };
+      const persisted = await this.saveDraftToStorage(draft);
+      return { ok: false, draft: persisted };
+    }
+
+    // Create the bridged polygon
+    const now = new Date();
+    const polygon: MapPolygon = {
+      id: makePolygonID(crypto.randomUUID()),
+      geometry: { type: "Polygon", coordinates: [closedRing] },
+      display_name: name,
+      created_at: now,
+      updated_at: now,
+    };
+
+    this.polygonStore.add(polygon);
+    this.indexPolygon(polygon);
+
+    this.pushHistory({
+      createdPolygons: [polygon],
+      deletedPolygons: [],
+      modifiedPolygons: [],
+    });
+
+    await this.storageAdapter.batchWrite({
+      createdPolygons: [polygon],
+      deletedPolygonIds: [],
+      modifiedPolygons: [],
+    });
+
+    return { ok: true, polygon };
   }
 
   // ============================================================
@@ -1048,6 +1174,7 @@ export class MapPolygonEditor {
       ...(metadata !== undefined ? { metadata } : {}),
     };
     this.draftStore.save(persisted);
+    this.indexDraftEndpoints(persisted);
     await this.storageAdapter.saveDraft(persisted);
     return persisted;
   }
@@ -1066,6 +1193,8 @@ export class MapPolygonEditor {
 
   async deleteDraftFromStorage(id: DraftID): Promise<void> {
     this.guard();
+    const draft = this.draftStore.get(id);
+    if (draft) this.unindexDraftEndpoints(draft);
     this.draftStore.delete(id);
     await this.storageAdapter.deleteDraft(id);
   }
@@ -1232,5 +1361,131 @@ export class MapPolygonEditor {
     for (const p of this.polygonStore.getAll()) {
       this.indexPolygon(p);
     }
+  }
+
+  // ============================================================
+  // Draft Endpoint Index
+  // ============================================================
+
+  private indexDraftEndpoints(draft: PersistedDraft): void {
+    if (draft.points.length < 2) return;
+    const first = draft.points[0]!;
+    const last = draft.points[draft.points.length - 1]!;
+    for (const p of [first, last]) {
+      const key = this.coordGridKey(p.lng, p.lat);
+      let set = this.draftEndpointIndex.get(key);
+      if (!set) {
+        set = new Set();
+        this.draftEndpointIndex.set(key, set);
+      }
+      set.add(draft.id);
+    }
+  }
+
+  private unindexDraftEndpoints(draft: PersistedDraft): void {
+    if (draft.points.length < 2) return;
+    const first = draft.points[0]!;
+    const last = draft.points[draft.points.length - 1]!;
+    for (const p of [first, last]) {
+      const key = this.coordGridKey(p.lng, p.lat);
+      const set = this.draftEndpointIndex.get(key);
+      if (set) {
+        set.delete(draft.id);
+        if (set.size === 0) this.draftEndpointIndex.delete(key);
+      }
+    }
+  }
+
+  private rebuildDraftEndpointIndex(): void {
+    this.draftEndpointIndex.clear();
+    for (const d of this.draftStore.getAll()) {
+      this.indexDraftEndpoints(d);
+    }
+  }
+
+  // ============================================================
+  // Loop Detection
+  // ============================================================
+
+  private detectAndBuildLoop(
+    newLine: number[][], // [lng, lat][]
+  ): { ring: number[][]; consumedDraftIds: DraftID[] } | null {
+    if (newLine.length < 2) return null;
+
+    const allDrafts = this.draftStore.getAll();
+    if (allDrafts.length === 0) return null;
+
+    const newLineStart: [number, number] = [newLine[0]![0]!, newLine[0]![1]!];
+    const newLineEnd: [number, number] = [
+      newLine[newLine.length - 1]![0]!,
+      newLine[newLine.length - 1]![1]!,
+    ];
+
+    // Build draft endpoints for graph construction
+    const draftEndpoints: DraftEndpoint[] = allDrafts
+      .filter((d) => d.points.length >= 2)
+      .map((d) => ({
+        id: d.id,
+        firstCoord: [d.points[0]!.lng, d.points[0]!.lat] as [number, number],
+        lastCoord: [
+          d.points[d.points.length - 1]!.lng,
+          d.points[d.points.length - 1]!.lat,
+        ] as [number, number],
+      }));
+
+    // coordToPolygonIds callback using the existing coordIndex
+    const coordToPolygonIds = (key: string): PolygonID[] => {
+      const set = this.coordIndex.get(key);
+      return set ? [...set] : [];
+    };
+
+    const gridKeyFn = (lng: number, lat: number) => this.coordGridKey(lng, lat);
+
+    const graph = buildConnectivityGraph(
+      draftEndpoints,
+      coordToPolygonIds,
+      gridKeyFn,
+      [newLineStart, newLineEnd],
+    );
+
+    const startKey = this.coordGridKey(newLineStart[0], newLineStart[1]);
+    const targetKey = this.coordGridKey(newLineEnd[0], newLineEnd[1]);
+
+    const loop = findLoop(graph, startKey, targetKey);
+    if (!loop) return null;
+
+    // Build polygon rings map and draft points map for ring extraction
+    const polygonRings = new Map<PolygonID, number[][]>();
+    for (const p of this.polygonStore.getAll()) {
+      polygonRings.set(p.id, p.geometry.coordinates[0]!);
+    }
+
+    const draftPointsMap = new Map<DraftID, number[][]>();
+    for (const d of allDrafts) {
+      draftPointsMap.set(
+        d.id,
+        d.points.map((p) => [p.lng, p.lat]),
+      );
+    }
+
+    const ring = extractLoopRing(
+      loop,
+      newLine,
+      polygonRings,
+      draftPointsMap,
+      gridKeyFn,
+    );
+
+    if (ring.length < 4) return null; // need at least 3 vertices + closing
+
+    // Collect consumed draft IDs from the loop edges
+    const consumedDraftIds: DraftID[] = [];
+    for (const edge of loop.edges) {
+      if (edge.type === "draft") {
+        consumedDraftIds.push(edge.entityId as DraftID);
+      }
+    }
+
+    return { ring, consumedDraftIds };
   }
 }

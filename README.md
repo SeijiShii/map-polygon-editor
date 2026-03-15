@@ -16,7 +16,7 @@
 ## 主な機能
 
 - **ポリゴン描画・編集**：頂点の追加・移動・削除、切断線による分割
-- **グループ管理**：ポリゴンやグループの木構造によるネスト管理
+- **ポリゴン間ブリッジ**：2ポリゴンの頂点間を描画 → 共有辺またはドラフト経由の閉回路を自動検出 → 新ポリゴン生成
 - **共有境界の連動編集**：隣接ポリゴンの境界頂点を同時更新
 - **Undo / Redo**：ドラフト内・コミット済みの2レイヤー
 - **ストレージ抽象化**：`StorageAdapter` インターフェースによる永続化層の委譲
@@ -50,7 +50,7 @@ Terra Draw  flutter_map  Google Maps
 
 ## ステータス
 
-v2 全 API 実装完了。299 テスト通過。
+v2 全 API 実装完了。256 テスト通過。
 
 ### 実装済み
 
@@ -59,6 +59,6 @@ v2 全 API 実装完了。299 テスト通過。
 - MapPolygonEditor ファサード（全 API）
 - DraftShape 操作（描画・検証・GeoJSON 変換）
 - エラー体系（12 エラークラス）
-- ジオメトリ演算: `splitPolygon`, `carveInnerPolygon`, `punchHole`, `expandWithPolygon`
+- ジオメトリ演算: `splitPolygon`, `carveInnerPolygon`, `punchHole`, `expandWithPolygon`, `bridgePolygons`
 - 共有境界連動: `sharedEdgeMove`（座標ハッシュインデックス）
 - グループ外周取得: `getGroupPolygons`（@turf/turf Union 計算）

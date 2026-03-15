@@ -25,6 +25,7 @@ export {
   DraftNotClosedError,
   InvalidGeometryError,
   DraftNotFoundError,
+  NoSharedEdgeError,
 } from "./errors.js";
 
 // Stores
@@ -48,6 +49,8 @@ export { validateDraft } from "./draft/validate-draft.js";
 
 // Geometry utilities
 export { computeUnion } from "./geometry/compute-union.js";
+export { computeBridgePolygon } from "./geometry/bridge-polygon.js";
 
 // Editor facade
 export { MapPolygonEditor } from "./editor.js";
+export type { BridgeResult } from "./editor.js";

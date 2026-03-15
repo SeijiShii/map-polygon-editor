@@ -1500,4 +1500,529 @@ describe("MapPolygonEditor", () => {
       expect(editor.getPolygon(makePolygonID("p-1"))).not.toBeNull();
     });
   });
+
+  // ============================================================
+  // bridgePolygons
+  // ============================================================
+
+  describe("bridgePolygons", () => {
+    // Two adjacent unit squares sharing edge [1,0]-[1,1]
+    //  A: [0,0]-[1,0]-[1,1]-[0,1]   (CCW)
+    //  B: [1,0]-[2,0]-[2,1]-[1,1]   (CCW)
+    const unitSquareA: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ],
+    };
+    const unitSquareB: GeoJSONPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [1, 0],
+          [2, 0],
+          [2, 1],
+          [1, 1],
+          [1, 0],
+        ],
+      ],
+    };
+
+    function makeAdjacentSquares(): MapPolygon[] {
+      const now = new Date();
+      return [
+        {
+          id: makePolygonID("a-1"),
+          geometry: unitSquareA,
+          display_name: "SquareA",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("b-1"),
+          geometry: unitSquareB,
+          display_name: "SquareB",
+          created_at: now,
+          updated_at: now,
+        },
+      ];
+    }
+
+    it("creates a new polygon bridging two adjacent squares", async () => {
+      const polys = makeAdjacentSquares();
+      const { editor } = await createEditor(polys);
+
+      // Bridge from A vertex 3 [0,1] → outside [0,2],[2,2] → B vertex 2 [2,1]
+      const bridgePath = [
+        { lat: 1, lng: 0 }, // A[3] = [0,1] (lng=0,lat=1)
+        { lat: 2, lng: 0 }, // outside
+        { lat: 2, lng: 2 }, // outside
+        { lat: 1, lng: 2 }, // B[2] = [2,1] (lng=2,lat=1)
+      ];
+
+      const result = await editor.bridgePolygons(
+        makePolygonID("a-1"),
+        3, // vertex index on A
+        makePolygonID("b-1"),
+        2, // vertex index on B
+        bridgePath,
+        "BridgedArea",
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.polygon.display_name).toBe("BridgedArea");
+        expect(result.polygon.geometry.type).toBe("Polygon");
+        // Original polygons are unchanged
+        expect(editor.getPolygon(makePolygonID("a-1"))).not.toBeNull();
+        expect(editor.getPolygon(makePolygonID("b-1"))).not.toBeNull();
+        // New polygon is stored
+        expect(editor.getPolygon(result.polygon.id)).not.toBeNull();
+        // Total polygons: A + B + bridged = 3
+        expect(editor.getAllPolygons()).toHaveLength(3);
+      }
+    });
+
+    it("saves draft when polygons share no edge", async () => {
+      const now = new Date();
+      const farSquare: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [5, 5],
+            [6, 5],
+            [6, 6],
+            [5, 6],
+            [5, 5],
+          ],
+        ],
+      };
+      const polys: MapPolygon[] = [
+        {
+          id: makePolygonID("a-1"),
+          geometry: unitSquareA,
+          display_name: "A",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("far-1"),
+          geometry: farSquare,
+          display_name: "Far",
+          created_at: now,
+          updated_at: now,
+        },
+      ];
+      const { editor } = await createEditor(polys);
+
+      const bridgePath = [
+        { lat: 1, lng: 0 },
+        { lat: 3, lng: 3 },
+        { lat: 6, lng: 6 },
+      ];
+
+      const result = await editor.bridgePolygons(
+        makePolygonID("a-1"),
+        3,
+        makePolygonID("far-1"),
+        2,
+        bridgePath,
+        "Attempt",
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.draft).toBeDefined();
+        expect(result.draft.points).toHaveLength(3);
+        expect(result.draft.isClosed).toBe(false);
+      }
+    });
+
+    it("throws PolygonNotFoundError when polygon A does not exist", async () => {
+      const polys = makeAdjacentSquares();
+      const { editor } = await createEditor(polys);
+
+      await expect(
+        editor.bridgePolygons(
+          makePolygonID("nonexistent"),
+          0,
+          makePolygonID("b-1"),
+          0,
+          [{ lat: 0, lng: 0 }],
+          "Test",
+        ),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("throws PolygonNotFoundError when polygon B does not exist", async () => {
+      const polys = makeAdjacentSquares();
+      const { editor } = await createEditor(polys);
+
+      await expect(
+        editor.bridgePolygons(
+          makePolygonID("a-1"),
+          0,
+          makePolygonID("nonexistent"),
+          0,
+          [{ lat: 0, lng: 0 }],
+          "Test",
+        ),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("undo removes the bridged polygon; originals remain", async () => {
+      const polys = makeAdjacentSquares();
+      const { editor } = await createEditor(polys);
+
+      const bridgePath = [
+        { lat: 1, lng: 0 },
+        { lat: 2, lng: 0 },
+        { lat: 2, lng: 2 },
+        { lat: 1, lng: 2 },
+      ];
+
+      const result = await editor.bridgePolygons(
+        makePolygonID("a-1"),
+        3,
+        makePolygonID("b-1"),
+        2,
+        bridgePath,
+        "BridgedArea",
+      );
+
+      expect(result.ok).toBe(true);
+      expect(editor.getAllPolygons()).toHaveLength(3);
+
+      await editor.undo();
+
+      expect(editor.getAllPolygons()).toHaveLength(2);
+      expect(editor.getPolygon(makePolygonID("a-1"))).not.toBeNull();
+      expect(editor.getPolygon(makePolygonID("b-1"))).not.toBeNull();
+    });
+
+    it("new polygon vertices are registered in coordIndex (sharedEdgeMove works)", async () => {
+      const polys = makeAdjacentSquares();
+      const { editor } = await createEditor(polys);
+
+      const bridgePath = [
+        { lat: 1, lng: 0 },
+        { lat: 2, lng: 0 },
+        { lat: 2, lng: 2 },
+        { lat: 1, lng: 2 },
+      ];
+
+      const result = await editor.bridgePolygons(
+        makePolygonID("a-1"),
+        3,
+        makePolygonID("b-1"),
+        2,
+        bridgePath,
+        "BridgedArea",
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // The bridged polygon shares vertex [1,1] with A[2] and B[3].
+      // Moving [1,1] on A should also move it on the bridged polygon.
+      const updated = await editor.sharedEdgeMove(
+        makePolygonID("a-1"),
+        2, // vertex [1,1] on A
+        1.5,
+        1, // move to [1, 1.5]
+      );
+
+      // Should update A, B, and the bridged polygon
+      expect(updated.length).toBeGreaterThanOrEqual(3);
+    });
+
+    // --- Loop detection tests ---
+
+    it("detects closed loop through 3 polygons and 2 existing drafts", async () => {
+      // 3 non-adjacent triangles
+      const now = new Date();
+      const triA: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [0.5, 1],
+            [0, 0],
+          ],
+        ],
+      };
+      const triB: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [3, 0],
+            [4, 0],
+            [3.5, 1],
+            [3, 0],
+          ],
+        ],
+      };
+      const triC: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [1.5, 3],
+            [2.5, 3],
+            [2, 4],
+            [1.5, 3],
+          ],
+        ],
+      };
+
+      const polys: MapPolygon[] = [
+        {
+          id: makePolygonID("triA"),
+          geometry: triA,
+          display_name: "A",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("triB"),
+          geometry: triB,
+          display_name: "B",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("triC"),
+          geometry: triC,
+          display_name: "C",
+          created_at: now,
+          updated_at: now,
+        },
+      ];
+      const { editor } = await createEditor(polys);
+
+      // 1st bridge: A[1,0] → B[3,0] — no shared edge → draft D1
+      const r1 = await editor.bridgePolygons(
+        makePolygonID("triA"),
+        1,
+        makePolygonID("triB"),
+        0,
+        [
+          { lat: 0, lng: 1 },
+          { lat: 0, lng: 2 },
+          { lat: 0, lng: 3 },
+        ],
+        "D1",
+      );
+      expect(r1.ok).toBe(false);
+
+      // 2nd bridge: B[3.5,1] → C[1.5,3] — no shared edge → draft D2
+      const r2 = await editor.bridgePolygons(
+        makePolygonID("triB"),
+        2,
+        makePolygonID("triC"),
+        0,
+        [
+          { lat: 1, lng: 3.5 },
+          { lat: 2, lng: 2.5 },
+          { lat: 3, lng: 1.5 },
+        ],
+        "D2",
+      );
+      expect(r2.ok).toBe(false);
+
+      // 3rd bridge: C[2,4] → A[0.5,1] — loop should be detected!
+      const r3 = await editor.bridgePolygons(
+        makePolygonID("triC"),
+        2,
+        makePolygonID("triA"),
+        2,
+        [
+          { lat: 4, lng: 2 },
+          { lat: 1, lng: 0.5 },
+        ],
+        "LoopPoly",
+      );
+      expect(r3.ok).toBe(true);
+      if (r3.ok) {
+        expect(r3.polygon.display_name).toBe("LoopPoly");
+        expect(r3.polygon.geometry.type).toBe("Polygon");
+        // Original polygons unchanged
+        expect(editor.getPolygon(makePolygonID("triA"))).not.toBeNull();
+        expect(editor.getPolygon(makePolygonID("triB"))).not.toBeNull();
+        expect(editor.getPolygon(makePolygonID("triC"))).not.toBeNull();
+        // Total: 3 originals + 1 loop polygon = 4
+        expect(editor.getAllPolygons()).toHaveLength(4);
+      }
+    });
+
+    it("consumed drafts are deleted after loop detection", async () => {
+      const now = new Date();
+      const triA: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [0.5, 1],
+            [0, 0],
+          ],
+        ],
+      };
+      const triB: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [3, 0],
+            [4, 0],
+            [3.5, 1],
+            [3, 0],
+          ],
+        ],
+      };
+      const triC: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [1.5, 3],
+            [2.5, 3],
+            [2, 4],
+            [1.5, 3],
+          ],
+        ],
+      };
+
+      const polys: MapPolygon[] = [
+        {
+          id: makePolygonID("triA"),
+          geometry: triA,
+          display_name: "A",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("triB"),
+          geometry: triB,
+          display_name: "B",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("triC"),
+          geometry: triC,
+          display_name: "C",
+          created_at: now,
+          updated_at: now,
+        },
+      ];
+      const { editor } = await createEditor(polys);
+
+      // Create 2 drafts
+      await editor.bridgePolygons(
+        makePolygonID("triA"),
+        1,
+        makePolygonID("triB"),
+        0,
+        [
+          { lat: 0, lng: 1 },
+          { lat: 0, lng: 2 },
+          { lat: 0, lng: 3 },
+        ],
+        "D1",
+      );
+      await editor.bridgePolygons(
+        makePolygonID("triB"),
+        2,
+        makePolygonID("triC"),
+        0,
+        [
+          { lat: 1, lng: 3.5 },
+          { lat: 2, lng: 2.5 },
+          { lat: 3, lng: 1.5 },
+        ],
+        "D2",
+      );
+
+      expect(editor.listPersistedDrafts()).toHaveLength(2);
+
+      // Close the loop
+      await editor.bridgePolygons(
+        makePolygonID("triC"),
+        2,
+        makePolygonID("triA"),
+        2,
+        [
+          { lat: 4, lng: 2 },
+          { lat: 1, lng: 0.5 },
+        ],
+        "LoopPoly",
+      );
+
+      // Consumed drafts should be deleted
+      expect(editor.listPersistedDrafts()).toHaveLength(0);
+    });
+
+    it("no loop found still saves draft", async () => {
+      const now = new Date();
+      const triA: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [0.5, 1],
+            [0, 0],
+          ],
+        ],
+      };
+      const triC: GeoJSONPolygon = {
+        type: "Polygon",
+        coordinates: [
+          [
+            [1.5, 3],
+            [2.5, 3],
+            [2, 4],
+            [1.5, 3],
+          ],
+        ],
+      };
+      const polys: MapPolygon[] = [
+        {
+          id: makePolygonID("triA"),
+          geometry: triA,
+          display_name: "A",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          id: makePolygonID("triC"),
+          geometry: triC,
+          display_name: "C",
+          created_at: now,
+          updated_at: now,
+        },
+      ];
+      const { editor } = await createEditor(polys);
+
+      // No existing drafts, A and C not connected → should save draft
+      const result = await editor.bridgePolygons(
+        makePolygonID("triA"),
+        1,
+        makePolygonID("triC"),
+        0,
+        [
+          { lat: 0, lng: 1 },
+          { lat: 3, lng: 1.5 },
+        ],
+        "Attempt",
+      );
+      expect(result.ok).toBe(false);
+      expect(editor.listPersistedDrafts()).toHaveLength(1);
+    });
+  });
 });
