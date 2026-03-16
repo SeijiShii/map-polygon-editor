@@ -50,7 +50,7 @@ Test Files  9 passed (9)
 
 | API | 状態 | 備考 |
 |-----|------|------|
-| 初期化 + クエリ | ✅ 完了 | |
+| 初期化 + クエリ | ✅ 完了 | findNearestVertex, findEdgeIntersections 含む |
 | Polygon CRUD | ✅ 完了 | |
 | Draft 永続化 + Undo/Redo | ✅ 完了 | |
 | `sharedEdgeMove` | ✅ 完了 | |

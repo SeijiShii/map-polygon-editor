@@ -123,7 +123,29 @@ deleteDraftFromStorage(id: DraftID) → Promise<void>
 
 ### スナッピング（吸着）について
 
-スナッピングは**ライブラリの責務外**とする。アプリ側で座標を補正する。
+スナップ判定のしきい値はズームレベルに依存するため、**スナップするかどうかの判定はアプリ側の責務**とする。
+ライブラリは「何にスナップすべきか」を検索するクエリ API を提供する（→ [スナップ補助クエリ](#スナップ補助クエリ)）。
+
+典型的なアプリ側のフロー：
+
+```
+// 1. スナップ半径をズームレベルから計算（アプリ側）
+const snapRadius = pixelToDegreesAtZoom(20, zoomLevel);
+
+// 2. ライブラリに最近傍頂点を問い合わせ
+const nearest = editor.findNearestVertex(tapPoint, snapRadius);
+const snappedPoint = nearest ?? tapPoint;
+
+// 3. 前の頂点との間に交差点があれば自動挿入
+if (draft.points.length > 0) {
+  const prev = draft.points[draft.points.length - 1];
+  const intersections = editor.findEdgeIntersections(prev, snappedPoint);
+  for (const ip of intersections) {
+    draft = addPoint(draft, ip);
+  }
+}
+draft = addPoint(draft, snappedPoint);
+```
 
 ---
 
@@ -228,6 +250,45 @@ DraftShape はイミュータブルなデータ構造で、以下の純粋関数
 |----------|------|--------|------|
 | `getPolygon(id)` | PolygonID | `Polygon \| null` | ID で Polygon を取得 |
 | `getAllPolygons()` | — | `Polygon[]` | 全 Polygon を取得 |
+| `findNearestVertex(point, radius)` | Point, number（度） | `Point \| null` | 半径内の最近傍ポリゴン頂点を返す |
+| `findEdgeIntersections(p1, p2)` | Point, Point | `Point[]` | セグメントと全ポリゴン辺の交差点を p1 からの距離順で返す |
+
+### スナップ補助クエリ
+
+下書き線の描画中に既存ポリゴンの頂点・辺との関係を検索する。
+副作用なし（ポリゴンやドラフトを変更しない）。
+
+#### findNearestVertex
+
+```
+findNearestVertex(
+  point  : Point,    // 検索中心座標
+  radius : number    // 検索半径（度単位）
+) → Point | null
+```
+
+全ポリゴンの全頂点を走査し、`radius` 内で最も近い頂点を返す。
+該当なしの場合は `null`。距離は度単位の二乗距離で比較する（`Math.sqrt` 不要）。
+
+- `radius` はアプリ側がズームレベルに応じて算出する
+- 閉リングの重複頂点（先頭 = 末尾）も走査対象だが、結果に影響しない
+- 複数ポリゴンにまたがるグローバル検索
+
+#### findEdgeIntersections
+
+```
+findEdgeIntersections(
+  p1 : Point,    // セグメント始点
+  p2 : Point     // セグメント終点
+) → Point[]
+```
+
+セグメント `p1→p2` と全ポリゴンの全辺の交差点を検出し、`p1` からの距離が近い順に返す。
+交差なしの場合は空配列。内部では `@turf/line-intersect` を使用（`splitPolygon` と同じ）。
+
+- 下書き線に新しい頂点を追加する直前に、前の頂点との間でこの API を呼び出し、
+  返された交差点を先に `addPoint` することで辺との交差点を自動挿入できる
+- 複数ポリゴンの辺と交差する場合も全て返す
 
 ### Polygon 保存・編集
 
