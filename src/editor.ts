@@ -10,6 +10,7 @@ import type {
   StorageAdapter,
   GeometryViolation,
   GeoJSONPolygon,
+  Point,
 } from "./types/index.js";
 import { makePolygonID, makeUnionCacheID, makeDraftID } from "./types/index.js";
 import { PolygonStore } from "./polygon-store/polygon-store.js";
@@ -139,6 +140,64 @@ export class MapPolygonEditor {
   getAllPolygons(): MapPolygon[] {
     this.guard();
     return this.polygonStore.getAll();
+  }
+
+  findNearestVertex(point: Point, radius: number): Point | null {
+    this.guard();
+    const radiusSq = radius * radius;
+    let bestDistSq = Infinity;
+    let best: Point | null = null;
+
+    for (const polygon of this.polygonStore.getAll()) {
+      const ring = polygon.geometry.coordinates[0];
+      for (const coord of ring) {
+        const lng = coord[0];
+        const lat = coord[1];
+        const dLng = lng - point.lng;
+        const dLat = lat - point.lat;
+        const distSq = dLng * dLng + dLat * dLat;
+        if (distSq < radiusSq && distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = { lat, lng };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  findEdgeIntersections(p1: Point, p2: Point): Point[] {
+    this.guard();
+
+    const queryLine = turfLineString([
+      [p1.lng, p1.lat],
+      [p2.lng, p2.lat],
+    ]);
+
+    const results: Point[] = [];
+
+    for (const polygon of this.polygonStore.getAll()) {
+      const ring = polygon.geometry.coordinates[0];
+      for (let i = 0; i < ring.length - 1; i++) {
+        const edgeLine = turfLineString([ring[i], ring[i + 1]]);
+        const fc = lineIntersect(queryLine, edgeLine);
+        for (const feature of fc.features) {
+          const [lng, lat] = feature.geometry.coordinates;
+          results.push({ lat, lng });
+        }
+      }
+    }
+
+    // Sort by squared distance from p1
+    results.sort((a, b) => {
+      const dALng = a.lng - p1.lng;
+      const dALat = a.lat - p1.lat;
+      const dBLng = b.lng - p1.lng;
+      const dBLat = b.lat - p1.lat;
+      return dALng * dALng + dALat * dALat - (dBLng * dBLng + dBLat * dBLat);
+    });
+
+    return results;
   }
 
   // ============================================================
