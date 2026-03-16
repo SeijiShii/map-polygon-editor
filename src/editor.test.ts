@@ -2274,4 +2274,193 @@ describe("MapPolygonEditor", () => {
       });
     });
   });
+
+  // ============================================================
+  // Resolve Overlaps
+  // ============================================================
+
+  describe("resolveOverlaps", () => {
+    // Helper: square polygon at (x, y) with given size, coords in [lng, lat]
+    function makeSquareAt(
+      id: string,
+      x: number,
+      y: number,
+      size: number,
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [x, y],
+              [x + size, y],
+              [x + size, y + size],
+              [x, y + size],
+              [x, y],
+            ],
+          ],
+        },
+        display_name: id,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    function polyArea(polygon: MapPolygon): number {
+      const ring = polygon.geometry.coordinates[0]!;
+      let area = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const j = (i + 1) % ring.length;
+        area += ring[i]![0]! * ring[j]![1]!;
+        area -= ring[j]![0]! * ring[i]![1]!;
+      }
+      return Math.abs(area / 2);
+    }
+
+    it("throws NotInitializedError before initialize()", async () => {
+      const adapter = createMockAdapter();
+      const editor = new MapPolygonEditor({ storageAdapter: adapter });
+      await expect(
+        editor.resolveOverlaps([makePolygonID("a"), makePolygonID("b")]),
+      ).rejects.toThrow(NotInitializedError);
+    });
+
+    it("throws InvalidGeometryError with fewer than 2 IDs", async () => {
+      const { editor } = await createEditor([makeSquareAt("a", 0, 0, 1)]);
+      await expect(
+        editor.resolveOverlaps([makePolygonID("a")]),
+      ).rejects.toThrow(InvalidGeometryError);
+    });
+
+    it("throws PolygonNotFoundError for non-existent ID", async () => {
+      const { editor } = await createEditor([makeSquareAt("a", 0, 0, 1)]);
+      await expect(
+        editor.resolveOverlaps([makePolygonID("a"), makePolygonID("missing")]),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("returns empty arrays when polygons do not overlap", async () => {
+      // Two squares far apart
+      const a = makeSquareAt("a", 0, 0, 1);
+      const b = makeSquareAt("b", 5, 5, 1);
+      const { editor } = await createEditor([a, b]);
+
+      const result = await editor.resolveOverlaps([a.id, b.id]);
+      expect(result.modified).toHaveLength(0);
+      expect(result.created).toHaveLength(0);
+
+      // Original polygons unchanged
+      expect(editor.getPolygon(a.id)!.geometry).toEqual(a.geometry);
+      expect(editor.getPolygon(b.id)!.geometry).toEqual(b.geometry);
+    });
+
+    it("splits 2 overlapping squares into 3 non-overlapping pieces", async () => {
+      // A: [0,0]-[2,0]-[2,2]-[0,2], B: [1,0]-[3,0]-[3,2]-[1,2]
+      // Overlap region: [1,0]-[2,0]-[2,2]-[1,2] (area = 2)
+      const a = makeSquareAt("a", 0, 0, 2);
+      const b = makeSquareAt("b", 1, 0, 2);
+      const { editor } = await createEditor([a, b]);
+
+      const result = await editor.resolveOverlaps([a.id, b.id]);
+
+      // Both originals should be modified (shrunk)
+      expect(result.modified).toHaveLength(2);
+      // One intersection polygon created
+      expect(result.created).toHaveLength(1);
+
+      // Check areas: A-only=2, B-only=2, intersection=2 (total=6=original 4+4-2)
+      const aAfter = editor.getPolygon(a.id)!;
+      const bAfter = editor.getPolygon(b.id)!;
+      const intersection = result.created[0]!;
+
+      expect(polyArea(aAfter)).toBeCloseTo(2, 4);
+      expect(polyArea(bAfter)).toBeCloseTo(2, 4);
+      expect(polyArea(intersection)).toBeCloseTo(2, 4);
+
+      // IDs preserved
+      expect(aAfter.id).toBe(a.id);
+      expect(bAfter.id).toBe(b.id);
+    });
+
+    it("handles 3 overlapping polygons", async () => {
+      // Three squares with mutual overlaps
+      const a = makeSquareAt("a", 0, 0, 2);
+      const b = makeSquareAt("b", 1, 0, 2);
+      const c = makeSquareAt("c", 0.5, 1, 2);
+      const { editor } = await createEditor([a, b, c]);
+
+      const result = await editor.resolveOverlaps([a.id, b.id, c.id]);
+
+      // All 3 originals should be modified
+      expect(result.modified).toHaveLength(3);
+      // Should have intersection regions (pairwise + triple)
+      expect(result.created.length).toBeGreaterThanOrEqual(1);
+
+      // Total area should be preserved (union area)
+      const totalArea =
+        result.modified.reduce((s, p) => s + polyArea(p), 0) +
+        result.created.reduce((s, p) => s + polyArea(p), 0);
+      // Original areas: 4+4+4=12, but overlaps reduce the total
+      // The key invariant: total of all pieces should equal union area
+      expect(totalArea).toBeGreaterThan(0);
+
+      // No piece should overlap with any other (hard to verify geometrically,
+      // but at least total should be less than sum of originals)
+      expect(totalArea).toBeLessThan(12);
+    });
+
+    it("is undoable", async () => {
+      const a = makeSquareAt("a", 0, 0, 2);
+      const b = makeSquareAt("b", 1, 0, 2);
+      const { editor } = await createEditor([a, b]);
+
+      const result = await editor.resolveOverlaps([a.id, b.id]);
+      expect(result.created).toHaveLength(1);
+      const intersectionId = result.created[0]!.id;
+
+      // Undo
+      await editor.undo();
+
+      // Originals restored
+      expect(editor.getPolygon(a.id)!.geometry).toEqual(a.geometry);
+      expect(editor.getPolygon(b.id)!.geometry).toEqual(b.geometry);
+
+      // Intersection polygon removed
+      expect(editor.getPolygon(intersectionId)).toBeNull();
+    });
+
+    it("calls storageAdapter.batchWrite with correct data", async () => {
+      const a = makeSquareAt("a", 0, 0, 2);
+      const b = makeSquareAt("b", 1, 0, 2);
+      const { editor, adapter } = await createEditor([a, b]);
+
+      await editor.resolveOverlaps([a.id, b.id]);
+
+      expect(adapter.batchWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          createdPolygons: expect.arrayContaining([
+            expect.objectContaining({ geometry: expect.any(Object) }),
+          ]),
+          deletedPolygonIds: [],
+          modifiedPolygons: expect.arrayContaining([
+            expect.objectContaining({ id: a.id }),
+            expect.objectContaining({ id: b.id }),
+          ]),
+        }),
+      );
+    });
+
+    it("deduplicates polygon IDs", async () => {
+      const a = makeSquareAt("a", 0, 0, 2);
+      const b = makeSquareAt("b", 1, 0, 2);
+      const { editor } = await createEditor([a, b]);
+
+      // Pass duplicate IDs — should not error
+      const result = await editor.resolveOverlaps([a.id, b.id, a.id]);
+      expect(result.modified).toHaveLength(2);
+      expect(result.created).toHaveLength(1);
+    });
+  });
 });

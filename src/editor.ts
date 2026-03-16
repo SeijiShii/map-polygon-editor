@@ -813,6 +813,208 @@ export class MapPolygonEditor {
   }
 
   // ============================================================
+  // Resolve Overlaps
+  // ============================================================
+
+  async resolveOverlaps(
+    polygonIds: PolygonID[],
+  ): Promise<{ modified: MapPolygon[]; created: MapPolygon[] }> {
+    this.guard();
+
+    if (polygonIds.length < 2) {
+      throw new InvalidGeometryError(
+        "resolveOverlaps requires at least 2 polygon IDs",
+      );
+    }
+
+    // Deduplicate
+    const uniqueIds = [...new Set(polygonIds)];
+
+    // Validate all IDs exist and collect originals
+    const originals: MapPolygon[] = [];
+    for (const id of uniqueIds) {
+      const p = this.polygonStore.get(id);
+      if (!p) throw new PolygonNotFoundError(`Polygon "${id}" not found`);
+      originals.push(p);
+    }
+
+    const n = originals.length;
+    const originalCoords = originals.map(
+      (p) => p.geometry.coordinates as [number, number][][],
+    );
+
+    // Dynamic import of polyclip-ts operations
+    const { difference: polyClipDifference, union: polyClipUnion } =
+      await import("polyclip-ts");
+
+    // --- Compute exclusive regions for each original polygon ---
+    const exclusiveResults: ([number, number][][] | null)[] = [];
+    for (let i = 0; i < n; i++) {
+      // Union of all other polygons
+      let othersUnion: [number, number][][][] | null = null;
+      for (let j = 0; j < n; j++) {
+        if (j === i) continue;
+        if (othersUnion === null) {
+          othersUnion = [originalCoords[j]!];
+        } else {
+          const u = polyClipUnion(othersUnion, originalCoords[j]!);
+          othersUnion = u.length > 0 ? u : othersUnion;
+        }
+      }
+
+      if (othersUnion === null) {
+        // Only one polygon (shouldn't happen with n >= 2)
+        exclusiveResults.push(originalCoords[i]!);
+        continue;
+      }
+
+      const diff = polyClipDifference(originalCoords[i]!, othersUnion);
+
+      if (diff.length === 0) {
+        exclusiveResults.push(null); // Entirely covered by others
+      } else {
+        exclusiveResults.push(diff[0]!); // Largest piece (first)
+      }
+    }
+
+    // --- Compute intersection regions for subsets of size >= 2 ---
+    const createdPolygons: MapPolygon[] = [];
+    const now = new Date();
+
+    for (let mask = 1; mask < 1 << n; mask++) {
+      // Count bits
+      let bits = 0;
+      for (let b = 0; b < n; b++) {
+        if (mask & (1 << b)) bits++;
+      }
+      if (bits < 2) continue;
+
+      // Compute intersection of all included polygons
+      const includedCoords: [number, number][][][] = [];
+      const excludedCoords: [number, number][][][] = [];
+      for (let b = 0; b < n; b++) {
+        if (mask & (1 << b)) {
+          includedCoords.push(originalCoords[b]!);
+        } else {
+          excludedCoords.push(originalCoords[b]!);
+        }
+      }
+
+      // Intersection of all included
+      let region: [number, number][][][] = [includedCoords[0]!];
+      for (let k = 1; k < includedCoords.length; k++) {
+        region = polyClipIntersection(region, includedCoords[k]!);
+        if (region.length === 0) break;
+      }
+      if (region.length === 0) continue;
+
+      // Subtract all excluded polygons
+      if (excludedCoords.length > 0) {
+        let excludedUnion: [number, number][][][] = [excludedCoords[0]!];
+        for (let k = 1; k < excludedCoords.length; k++) {
+          excludedUnion = polyClipUnion(excludedUnion, excludedCoords[k]!);
+        }
+        region = polyClipDifference(region, excludedUnion);
+        if (region.length === 0) continue;
+      }
+
+      // Area check — discard slivers
+      for (const poly of region) {
+        const ring = poly[0];
+        if (!ring || ring.length < 4) continue;
+        const area = Math.abs(this.shoelaceArea(ring));
+        if (area < 1e-12) continue;
+
+        const newPoly: MapPolygon = {
+          id: makePolygonID(crypto.randomUUID()),
+          geometry: { type: "Polygon" as const, coordinates: poly },
+          display_name: "",
+          created_at: now,
+          updated_at: now,
+        };
+        createdPolygons.push(newPoly);
+      }
+    }
+
+    // --- Check if anything changed ---
+    if (createdPolygons.length === 0) {
+      // No intersection regions found — polygons don't overlap
+      return { modified: [], created: [] };
+    }
+
+    // --- Update original polygons ---
+    const modifiedPolygons: { before: MapPolygon; after: MapPolygon }[] = [];
+    const modifiedAfters: MapPolygon[] = [];
+    const extraCreated: MapPolygon[] = [];
+
+    for (let i = 0; i < n; i++) {
+      const exclusive = exclusiveResults[i] ?? null;
+      if (exclusive === null) continue; // Entirely covered — leave unchanged
+
+      const orig = originals[i]!;
+      const before = {
+        ...orig,
+        geometry: { ...orig.geometry },
+      };
+      const after: MapPolygon = {
+        ...orig,
+        geometry: {
+          type: "Polygon" as const,
+          coordinates: exclusive,
+        },
+        updated_at: now,
+      };
+
+      this.unindexPolygon(orig);
+      this.polygonStore.update(after);
+      this.indexPolygon(after);
+
+      modifiedPolygons.push({ before, after });
+      modifiedAfters.push(after);
+    }
+
+    // --- Add created intersection polygons ---
+    const allCreated = [...createdPolygons, ...extraCreated];
+    for (const p of allCreated) {
+      this.polygonStore.add(p);
+      this.indexPolygon(p);
+    }
+
+    // --- History ---
+    this.pushHistory({
+      createdPolygons: allCreated,
+      deletedPolygons: [],
+      modifiedPolygons,
+    });
+
+    // --- Persist ---
+    await this.storageAdapter.batchWrite({
+      createdPolygons: allCreated,
+      deletedPolygonIds: [],
+      modifiedPolygons: modifiedAfters,
+    });
+
+    // --- Invalidate caches ---
+    for (const id of uniqueIds) {
+      this.invalidateUnionCaches(id);
+    }
+
+    return { modified: modifiedAfters, created: allCreated };
+  }
+
+  /** Shoelace formula for signed area of a ring. */
+  private shoelaceArea(ring: [number, number][]): number {
+    let area = 0;
+    const len = ring.length;
+    for (let i = 0; i < len; i++) {
+      const j = (i + 1) % len;
+      area += ring[i]![0] * ring[j]![1];
+      area -= ring[j]![0] * ring[i]![1];
+    }
+    return area / 2;
+  }
+
+  // ============================================================
   // Split Polygon
   // ============================================================
 

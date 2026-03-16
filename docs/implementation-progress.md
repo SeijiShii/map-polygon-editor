@@ -59,6 +59,7 @@ Test Files  9 passed (9)
 | `punchHole` | ✅ 完了 | |
 | `expandWithPolygon` | ✅ 完了 | |
 | `bridgePolygons` | ✅ 完了 | 3段階判定: 直接ブリッジ → 閉回路検出 → ドラフト保存 |
+| `resolveOverlaps` | ✅ 完了 | N個対応、べき集合分解、元ID維持 |
 | Union Cache（基本） | ✅ 完了 | computeUnion, getCachedUnion, deleteCachedUnion |
 | Union Cache（階層） | ✅ 完了 | computeUnionFromCaches, カスケーディング dirty 伝播 |
 

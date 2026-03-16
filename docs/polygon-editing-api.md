@@ -166,6 +166,7 @@ draft = addPoint(draft, snappedPoint);
 | `expandWithPolygon` | 任意の Polygon |
 | `bridgePolygons` | 任意の2つの Polygon。元ポリゴンは変更されない |
 | `sharedEdgeMove` | 任意の Polygon。影響は全ポリゴンに及ぶ |
+| `resolveOverlaps` | 2つ以上の Polygon。元ポリゴンは縮小（ID維持）、交差部は新規 |
 | `renamePolygon` | 任意の Polygon |
 | `deletePolygon` | 任意の Polygon |
 
@@ -527,6 +528,53 @@ sharedEdgeMove(
 
 指定ポリゴンの頂点を移動し、**全ポリゴン**から
 同座標（epsilon 以内）の頂点を検索して連動更新する。
+
+### オーバーラップ解決
+
+重複する複数のポリゴンを、非重複な複数のポリゴンに分解する。
+
+```
+resolveOverlaps(
+  polygonIds : PolygonID[]   // 2つ以上のポリゴンID
+) → Promise<{
+  modified : MapPolygon[],   // 縮小された元ポリゴン（ID保持）
+  created  : MapPolygon[],   // 新規作成された交差領域ポリゴン
+}>
+```
+
+**動作:**
+
+1. 各ポリゴンの排他領域（他のポリゴンと重複しない部分）を計算し、元ポリゴンの geometry を更新（ID 維持）
+2. 全ての交差領域（2つ以上のポリゴンが重複する部分）を新規ポリゴンとして生成
+
+**例: 2ポリゴンの場合**
+
+```
+入力: A（面積4）, B（面積4）, 重複領域（面積2）
+
+結果:
+  modified: [A-only（面積2, ID=A）, B-only（面積2, ID=B）]
+  created:  [交差部（面積2, 新規ID）]
+```
+
+**N ポリゴン対応:**
+
+3つ以上のポリゴンにも対応する。べき集合分解により、全ての重複パターン（ペア、トリプル…）を正確に分離する。
+実用上は 2〜5 ポリゴンを想定。
+
+**重複なしの場合:**
+
+ポリゴン間に重複がなければ `{ modified: [], created: [] }` を返し、何も変更しない。
+
+**制約・注意事項:**
+
+| 項目 | 内容 |
+|------|------|
+| **元ポリゴンの ID** | 維持される（geometry のみ更新） |
+| **交差ポリゴン** | display_name は空文字、ID は自動生成 |
+| **微小スライバー** | 面積が極小（< 1e-12）の結果は自動破棄 |
+| **Undo** | 元ポリゴンの geometry を復元し、交差ポリゴンを削除 |
+| **coordIndex** | 更新されたポリゴンは再インデックスされる |
 
 ### 外輪郭キャッシュ（Union Cache）
 
