@@ -304,6 +304,8 @@ findEdgeIntersections(
 
 ### 切断線（Cut Line）による分割
 
+> 詳細な図解・ユースケースは [splitPolygon 詳細ドキュメント](split-polygon.md) を参照。
+
 切断線は**ポリゴンの外側から引き、辺と交差させる**ことで分割を発動する。
 
 #### ヒゲ（端部）の自動除去
@@ -339,6 +341,8 @@ splitPolygon(
 ```
 
 ### 内側ループによる操作
+
+> 詳細な図解・ユースケース・3操作の使い分けは [内側ループ操作 詳細ドキュメント](inner-operations.md) を参照。
 
 #### carveInnerPolygon（境界頂点からのティアドロップ型ループ）
 
@@ -378,6 +382,8 @@ expandWithPolygon(
 ```
 
 ### 2ポリゴン間ブリッジ → 隙間ポリゴン生成
+
+> 詳細な図解・ユースケース・3段階判定の説明は [bridgePolygons 詳細ドキュメント](bridge-polygons.md) を参照。
 
 2つの既存ポリゴンの頂点間にポリラインを描画し、
 共有辺または既存ドラフトを介して閉じたポリゴンを自動生成する。
@@ -532,6 +538,8 @@ sharedEdgeMove(
 
 ### オーバーラップ解決
 
+> 詳細な図解・ユースケースは [resolveOverlaps 詳細ドキュメント](resolve-overlaps.md) を参照。
+
 重複する複数のポリゴンを、非重複な複数のポリゴンに分解する。
 
 ```
@@ -578,6 +586,8 @@ resolveOverlaps(
 | **coordIndex** | 更新されたポリゴンは再インデックスされる |
 
 ### ドラフトとのオーバーラップ解決
+
+> 詳細な図解・ユースケースは [resolveOverlapsWithDraft 詳細ドキュメント](resolve-overlaps-with-draft.md) を参照。
 
 描画中のドラフト線（未確定ポリライン）が既存ポリゴンと交錯した場合に、
 交差部分を個別のポリゴンとして切り出し、残りをドラフト断片として返す。
@@ -633,6 +643,8 @@ resolveOverlapsWithDraft(
 | **複数回横断** | 4交差点なら2閉領域、2N交差点ならN閉領域を生成 |
 
 ### 外輪郭キャッシュ（Union Cache）
+
+> 詳細な図解・ユースケース・階層キャッシュの説明は [Union Cache 詳細ドキュメント](union-cache.md) を参照。
 
 指定したポリゴン群の外輪郭（union）を計算し、結果をキャッシュする仕組み。
 インメモリのみで動作し、StorageAdapter には影響しない。

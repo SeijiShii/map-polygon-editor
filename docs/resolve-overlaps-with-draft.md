@@ -1,12 +1,73 @@
 # resolveOverlapsWithDraft — ドラフト交錯時のリアルタイム分割
 
-## 概要
+## この機能が解決する問題
 
-既存ポリゴンに対して描画中のドラフト線（未確定ポリライン）が交錯した場合、
-確定前であっても交差部分を閉領域として切り出す。
+地図エディタでユーザがポリライン（ドラフト線）を描画しているとき、
+その線が既存のポリゴンを横切ることがある。
 
-`resolveOverlaps` がポリゴン同士の事後的な分割であるのに対し、
-`resolveOverlapsWithDraft` はドラフト線とポリゴンの交錯をリアルタイムに処理する。
+```
+         ドラフト線
+            ↓
+    ─ ─ ─ ─╱─ ─ ─ ─ ─
+   │       ╱           │
+   │      ╱  ここが     │   ← 既存ポリゴン
+   │     ╱   閉領域     │
+   │    ╱               │
+    ─ ─╱─ ─ ─ ─ ─ ─ ─ ─
+      ╱
+```
+
+このとき、**ドラフト線と既存ポリゴンの辺で囲まれた領域**を
+独立したポリゴンとして即座に切り出したい。
+ドラフトが確定（`saveAsPolygon`）するのを待たずに、
+描画中のタイミングでポリゴン分割を行える。
+
+### `splitPolygon` との違い
+
+| | `splitPolygon` | `resolveOverlapsWithDraft` |
+|---|---|---|
+| **入力** | ポリゴンを**貫通する**切断線 | ポリゴンを**横切る**ドラフト線 |
+| **目的** | 1つのポリゴンを2つ以上に**完全分割** | ドラフト線側の閉領域だけを**切り出す** |
+| **元ポリゴン** | **削除**され、全ピースが新規ID | **縮小**されるがID維持 |
+| **ドラフトの外側部分** | 使わない（ヒゲとして自動除去） | `remainingDrafts` として返す |
+| **典型的な用途** | 「この境界線でポリゴンを二分したい」 | 「描画中の線がポリゴンを横切ったので、交錯部を分離したい」 |
+
+---
+
+## ユースケースとアプリ側の呼び出しフロー
+
+### 想定シーン
+
+ユーザが新しいポリゴンを描画中に、既存ポリゴンの領域内を通過する線を引いた場合。
+たとえば道路を挟んで区画を描いているとき、隣の区画に食い込むケース。
+
+### 典型的な呼び出しタイミング
+
+```typescript
+// ユーザがドラフトに新しい頂点を追加するたびに
+function onDraftPointAdded(editor, draft, targetPolygonId) {
+  // 1. ドラフト線が既存ポリゴンと2回以上交差しているか確認
+  const allPoints = draft.points;
+  if (allPoints.length < 2) return;
+
+  const prev = allPoints[allPoints.length - 2];
+  const curr = allPoints[allPoints.length - 1];
+  const intersections = editor.findEdgeIntersections(prev, curr);
+
+  if (intersections.length > 0) {
+    // 2. 交差が検出されたら分割を実行
+    const result = await editor.resolveOverlapsWithDraft(
+      targetPolygonId,
+      draft,
+    );
+
+    // 3. 結果を反映
+    // result.created   → 新ポリゴンとして地図に表示
+    // result.modified  → 元ポリゴンの更新された形状を地図に反映
+    // result.remainingDrafts → ドラフト線を残りの断片で置き換え
+  }
+}
+```
 
 ---
 
@@ -20,14 +81,62 @@ interface DraftOverlapResult {
 }
 
 async resolveOverlapsWithDraft(
-  polygonId: PolygonID,
-  draft: DraftShape               // isClosed = false、2点以上
+  polygonId: PolygonID,          // 対象の既存ポリゴン
+  draft: DraftShape              // isClosed = false（ポリライン）、2点以上
 ): Promise<DraftOverlapResult>
 ```
 
 ---
 
-## アルゴリズム
+## 動作の図解
+
+### 基本ケース: ドラフトがポリゴンを横断
+
+```
+入力:
+  ポリゴン (ID="area-1")        ドラフト線
+  ┌──────────────┐
+  │              │              P1
+  │              │             ╱
+  │    元の      │   I1 ──── ╱  (I1: 左辺との交差点)
+  │    領域      │  ╱       ╱
+  │              │ ╱       ╱
+  │              │╱  閉   ╱
+  │              ╳  領域 ╱
+  │             ╱│      ╱
+  │            ╱ │     ╱
+  │           ╱  │  I2╱     (I2: 底辺との交差点)
+  └──────────╱───┘──╱──
+            ╱      ╱
+           P2    P3
+
+出力:
+  modified:        ポリゴン "area-1"（閉領域の分だけ縮小、ID維持）
+  created:         [閉領域（I1→...→I2 + ポリゴン境界ウォーク I2→I1）]
+  remainingDrafts: [P1→I1, I2→P2→P3]  ← ポリゴン外部の断片
+```
+
+### 水平ドラフトが矩形を二分
+
+```
+  P1                    P2
+───●────I1──────────I2────●───   ← ドラフト線
+        │  created  │
+        │ (面積 8)  │
+   ┌────┤           ├────┐
+   │    │           │    │
+   │    │  modified │    │      ← 元のポリゴン [0,0]-[4,0]-[4,4]-[0,4]
+   │    │ (面積 8)  │    │
+   └────┴───────────┴────┘
+
+  modified:        下半分（面積8, ID維持）
+  created:         [上半分（面積8, 新規ID）]
+  remainingDrafts: [P1→I1, I2→P2]
+```
+
+---
+
+## アルゴリズム詳細
 
 ### 1. 交差点検出
 
@@ -42,91 +151,25 @@ async resolveOverlapsWithDraft(
 
 ### 3. 閉領域構築
 
-内部セグメントごとに以下を行う：
-
-1. **ドラフト経路の収集**: iPt → 中間ドラフト頂点 → jPt
-2. **ポリゴン境界ウォーク**: jPt → iPt を前方（インデックス増加）と後方（インデックス減少）の両方向で歩き、中間頂点数の少ない方を選択
-3. **リング合成**: ドラフト経路 + 境界ウォーク → CCW 閉リング
-4. **面積チェック**: < 1e-12 はスライバーとして破棄
+内部セグメントごとに：
 
 ```
-ドラフト:        iPt ──→ (中間頂点) ──→ jPt
-境界ウォーク:    jPt ──→ (ポリゴン頂点) ──→ iPt  (短い方向)
-閉リング:        iPt → ... → jPt → ... → iPt
+ドラフト経路:    iPt ──→ (中間頂点) ──→ jPt
+                                          │
+境界ウォーク:    iPt ←── (ポリゴン頂点) ←─ jPt  (短い方向)
 ```
+
+1. ドラフト経路（iPt → 中間ドラフト頂点 → jPt）を収集
+2. ポリゴン境界を jPt → iPt に向かって歩く（前方/後方の短い方を選択）
+3. 合成して CCW 閉リングとし、面積 < 1e-12 はスライバーとして破棄
 
 ### 4. 元ポリゴン更新
 
-`polyclip-ts.difference(polygon, closedRegion)` で閉領域を除去し、geometry を更新する（ID 維持）。
+`polyclip-ts.difference(polygon, closedRegion)` で閉領域を除去。
 
 ### 5. 残りドラフト生成
 
 ポリゴン外部のドラフト断片を `DraftShape[]` として収集する。
-
----
-
-## 具体例
-
-### 水平ドラフトが矩形ポリゴンを横断
-
-```
-入力:
-  polygon: [0,0]-[4,0]-[4,4]-[0,4]（面積16）
-  draft:   (-1,2) → (5,2)  ← 左辺と右辺で交差
-
-交差点: (0,2) と (4,2)
-内部セグメント: (0,2) → (4,2)
-
-結果:
-  modified:        上半分または下半分（面積8, ID維持）
-  created:         [もう片方の半分（面積8, 新規ID）]
-  remainingDrafts: [(-1,2)→(0,2), (4,2)→(5,2)]  ← 外側の断片2本
-```
-
-### 同一辺からの出入り
-
-```
-入力:
-  polygon: [0,0]-[4,0]-[4,4]-[0,4]（面積16）
-  draft:   (1,-1) → (2,2) → (3,-1)  ← 底辺から出入り
-
-交差点: (4/3, 0) と (8/3, 0)  ← 両方とも底辺上
-内部セグメント: (4/3,0) → (2,2) → (8/3,0)
-
-結果:
-  modified:        元ポリゴンから三角形を除去（面積 44/3）
-  created:         [三角形（面積 4/3, 新規ID）]
-  remainingDrafts: [(1,-1)→(4/3,0), (8/3,0)→(3,-1)]
-```
-
-### 4交差点（2回横断）
-
-```
-入力:
-  polygon: [0,0]-[4,0]-[4,4]-[0,4]（面積16）
-  draft:   (-1,1) → (2,1) → (5,1) → (5,3) → (2,3) → (-1,3)
-
-交差点: (0,1), (4,1), (4,3), (0,3)
-内部セグメント: (0,1)→(4,1) と (4,3)→(0,3)
-
-結果:
-  modified:        元ポリゴンから2帯を除去
-  created:         [帯1, 帯2]
-  remainingDrafts: [(-1,1)→(0,1), (4,1)→(5,1)→(5,3)→(4,3), (0,3)→(-1,3)]
-```
-
----
-
-## 境界ウォークの方向選択
-
-交差点 iPt（辺 iEdge 上）と jPt（辺 jEdge 上）の間を歩く際：
-
-| 方向 | 頂点の走査順 | 説明 |
-|------|------------|------|
-| 前方 | ring[(jEdge+1)%n] → ... → ring[iEdge] | インデックス増加方向 |
-| 後方 | ring[jEdge] → ... → ring[(iEdge+1)%n] | インデックス減少方向 |
-
-中間頂点数の少ない方を選択する。同一辺上（iEdge === jEdge）の場合は中間頂点なし。
 
 ---
 
@@ -135,8 +178,8 @@ async resolveOverlapsWithDraft(
 | ケース | 挙動 |
 |--------|------|
 | 交差なし / 交差1点 | 何も変更せず、ドラフト全体を `remainingDrafts` として返す |
-| ドラフト全体がポリゴン内部 | 交差なし → 同上 |
-| 同一辺への出入り | ドラフト頂点を内部判定に使用（境界上の中点問題を回避） |
+| ドラフト全体がポリゴン内部 | 辺との交差なし → 同上 |
+| 同一辺への出入り | 底辺から入って底辺から出るケースにも対応 |
 | 4交差点（2回横断） | 2つの閉領域を個別に生成 |
 | 2N交差点 | N個の閉領域を生成 |
 | 微小スライバー | 面積 < 1e-12 で自動破棄 |
@@ -157,6 +200,8 @@ async resolveOverlapsWithDraft(
 
 ## 関連 API
 
-- [`resolveOverlaps`](polygon-editing-api.md#オーバーラップ解決) — 確定済みポリゴン同士の重複解決
-- [`splitPolygon`](polygon-editing-api.md#splitpolygon) — 切断線によるポリゴン分割
-- [`findEdgeIntersections`](polygon-editing-api.md#findedgeintersections) — セグメントと全ポリゴン辺の交差点検出
+| API | 関係 |
+|-----|------|
+| [`resolveOverlaps`](polygon-editing-api.md#オーバーラップ解決) | 確定済みポリゴン同士の重複解決（事後的） |
+| [`splitPolygon`](polygon-editing-api.md#splitpolygon) | 切断線でポリゴンを完全分割（元ポリゴンは削除） |
+| [`findEdgeIntersections`](polygon-editing-api.md#findedgeintersections) | ドラフト線と全ポリゴン辺の交差点検出（本APIの前段で使用） |
