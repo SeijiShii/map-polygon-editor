@@ -2463,4 +2463,312 @@ describe("MapPolygonEditor", () => {
       expect(result.created).toHaveLength(1);
     });
   });
+
+  // ============================================================
+  // resolveOverlapsWithDraft
+  // ============================================================
+
+  describe("resolveOverlapsWithDraft", () => {
+    // Helper: square polygon at (x, y) with given size, coords in [lng, lat]
+    function makeSquareAt(
+      id: string,
+      x: number,
+      y: number,
+      size: number,
+    ): MapPolygon {
+      const now = new Date();
+      return {
+        id: makePolygonID(id),
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [x, y],
+              [x + size, y],
+              [x + size, y + size],
+              [x, y + size],
+              [x, y],
+            ],
+          ],
+        },
+        display_name: id,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    function polyArea(polygon: MapPolygon): number {
+      const ring = polygon.geometry.coordinates[0]!;
+      let area = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const j = (i + 1) % ring.length;
+        area += ring[i]![0]! * ring[j]![1]!;
+        area -= ring[j]![0]! * ring[i]![1]!;
+      }
+      return Math.abs(area / 2);
+    }
+
+    // Open draft (polyline) — points are {lat, lng}
+    function openDraft(coords: [number, number][]): DraftShape {
+      return {
+        points: coords.map(([lat, lng]) => ({ lat, lng })),
+        isClosed: false,
+      };
+    }
+
+    it("throws NotInitializedError before initialize()", async () => {
+      const adapter = createMockAdapter();
+      const editor = new MapPolygonEditor({ storageAdapter: adapter });
+      await expect(
+        editor.resolveOverlapsWithDraft(
+          makePolygonID("a"),
+          openDraft([
+            [0, 0],
+            [1, 1],
+          ]),
+        ),
+      ).rejects.toThrow(NotInitializedError);
+    });
+
+    it("throws PolygonNotFoundError for non-existent polygon", async () => {
+      const { editor } = await createEditor([]);
+      await expect(
+        editor.resolveOverlapsWithDraft(
+          makePolygonID("missing"),
+          openDraft([
+            [0, 0],
+            [1, 1],
+          ]),
+        ),
+      ).rejects.toThrow(PolygonNotFoundError);
+    });
+
+    it("throws InvalidGeometryError if draft has fewer than 2 points", async () => {
+      const sq = makeSquareAt("a", 0, 0, 2);
+      const { editor } = await createEditor([sq]);
+      await expect(
+        editor.resolveOverlapsWithDraft(sq.id, openDraft([[0, 0]])),
+      ).rejects.toThrow(InvalidGeometryError);
+    });
+
+    it("returns no changes when draft does not intersect polygon", async () => {
+      // Square at [0,0]-[2,2], draft line far away at y=5
+      const sq = makeSquareAt("a", 0, 0, 2);
+      const { editor } = await createEditor([sq]);
+
+      const draft = openDraft([
+        [5, -1],
+        [5, 3],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      expect(result.created).toHaveLength(0);
+      expect(result.remainingDrafts).toHaveLength(1);
+      // Original polygon unchanged
+      expect(editor.getPolygon(sq.id)!.geometry).toEqual(sq.geometry);
+    });
+
+    it("splits when draft crosses polygon once (single closed region)", async () => {
+      // Square: [0,0]-[4,0]-[4,4]-[0,4] (area=16)
+      // Draft line enters at (2,0) bottom edge, goes up through interior,
+      // exits at (4,2) right edge
+      // Closed region: draft segment (2,0)→(4,2) + polygon boundary (4,2)→(4,0)→(2,0)
+      // This is a triangle with area = 0.5 * 2 * 2 = 2
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      // Draft: start outside bottom, cross bottom edge at (2,0),
+      // go to interior, cross right edge at (4,2), end outside right
+      // Points are [lat, lng] — lat=y, lng=x
+      const draft = openDraft([
+        [0, 2],
+        [-1, 2],
+        [-1, 5],
+        [2, 5],
+      ]);
+      // This draft goes: (lng=2,lat=0)→(lng=2,lat=-1)→(lng=5,lat=-1)→(lng=5,lat=2)
+      // Wait, let me reconsider. openDraft takes [lat, lng].
+      // We need a line from outside, crossing into polygon, crossing out.
+      //
+      // Square coords in [lng, lat]: [0,0],[4,0],[4,4],[0,4]
+      // Draft line: from (lng=-1, lat=1) → (lng=2, lat=1) → (lng=2, lat=-1)
+      // Intersections: left edge at (lng=0, lat=1), bottom edge at (lng=2, lat=0)
+      // Interior segment: (0,1) → (2,1) → (2,0)
+      // Closed region: (0,1)→(2,1)→(2,0) + boundary walk (2,0)→(0,0)→(0,1)
+      // = triangle-ish shape, area = 2
+      const draft2 = openDraft([
+        [1, -1],
+        [1, 2],
+        [-1, 2],
+      ]);
+
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft2);
+
+      // Should create one polygon (the closed region inside)
+      expect(result.created.length).toBeGreaterThanOrEqual(1);
+
+      // The original polygon should be modified (shrunk)
+      const modifiedPoly = result.modified;
+      expect(modifiedPoly.id).toBe(sq.id);
+      expect(polyArea(modifiedPoly)).toBeLessThan(16);
+
+      // Total area should be preserved
+      const totalArea =
+        polyArea(modifiedPoly) +
+        result.created.reduce((s, p) => s + polyArea(p), 0);
+      expect(totalArea).toBeCloseTo(16, 4);
+
+      // Should have remaining draft segments (the parts outside)
+      expect(result.remainingDrafts.length).toBeGreaterThanOrEqual(1);
+      // Each remaining draft should be open
+      for (const rd of result.remainingDrafts) {
+        expect(rd.isClosed).toBe(false);
+      }
+    });
+
+    it("splits when draft crosses polygon twice (two intersections, one closed region)", async () => {
+      // Square: [0,0]-[4,0]-[4,4]-[0,4] (area=16)
+      // Draft crosses left edge and right edge horizontally
+      // Draft: from (-1,2) → (5,2) — enters at (0,2), exits at (4,2)
+      // Closed region: top half or bottom half depending on boundary walk direction
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      // Points [lat, lng]: (lat=2, lng=-1) → (lat=2, lng=5)
+      const draft = openDraft([
+        [2, -1],
+        [2, 5],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      expect(result.created).toHaveLength(1);
+      // The closed region is half the square (area=8)
+      expect(polyArea(result.created[0]!)).toBeCloseTo(8, 4);
+
+      // Modified polygon is the other half (area=8)
+      expect(polyArea(result.modified)).toBeCloseTo(8, 4);
+
+      // Two remaining draft segments (left outside + right outside)
+      expect(result.remainingDrafts).toHaveLength(2);
+    });
+
+    it("handles draft that enters and exits through the same edge", async () => {
+      // Square: [0,0]-[4,0]-[4,4]-[0,4]
+      // Draft enters bottom edge at (1,0), goes up to (2,2), exits bottom at (3,0)
+      // Closed region: (1,0)→(2,2)→(3,0) + boundary (3,0)→(1,0) = triangle area=2
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      // [lat, lng]: from outside (lat=-1,lng=1) → into polygon (lat=2,lng=2) → outside (lat=-1,lng=3)
+      const draft = openDraft([
+        [-1, 1],
+        [2, 2],
+        [-1, 3],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      expect(result.created).toHaveLength(1);
+      // Triangle: intersections at (4/3, 0) and (8/3, 0), apex at (2, 2)
+      // base = 4/3, height = 2, area = 4/3
+      expect(polyArea(result.created[0]!)).toBeCloseTo(4 / 3, 4);
+
+      // Modified polygon: 16 - 4/3 = 44/3
+      expect(polyArea(result.modified)).toBeCloseTo(44 / 3, 4);
+    });
+
+    it("handles draft entirely inside polygon (no intersections with edges)", async () => {
+      // Draft is completely inside — no edge crossings, no closed region possible
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      const draft = openDraft([
+        [1, 1],
+        [2, 2],
+        [1, 3],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      // No intersections → nothing created, polygon unchanged
+      expect(result.created).toHaveLength(0);
+      expect(editor.getPolygon(sq.id)!.geometry).toEqual(sq.geometry);
+      // The entire draft becomes a remaining draft
+      expect(result.remainingDrafts).toHaveLength(1);
+    });
+
+    it("handles draft with multiple crossings (4 intersections → 2 closed regions)", async () => {
+      // Square: [0,0]-[4,0]-[4,4]-[0,4]
+      // Draft zigzags through the polygon:
+      // outside→in→out→in→out
+      // Entry/exit pairs each form a closed region
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      // Draft: goes through bottom and top edges twice
+      // [lat, lng]: (-1,1)→(2,1)→(5,1)→(5,3)→(2,3)→(-1,3)
+      // Intersections: (0,1), (4,1), (4,3), (0,3)
+      // Interior segments: (0,1)→(2,1)→(4,1) and (4,3)→(2,3)→(0,3)
+      const draft = openDraft([
+        [-1, 1],
+        [2, 1],
+        [5, 1],
+        [5, 3],
+        [2, 3],
+        [-1, 3],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      // Two closed regions
+      expect(result.created).toHaveLength(2);
+
+      // Total area preserved
+      const totalArea =
+        polyArea(result.modified) +
+        result.created.reduce((s, p) => s + polyArea(p), 0);
+      expect(totalArea).toBeCloseTo(16, 4);
+    });
+
+    it("is undoable", async () => {
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor } = await createEditor([sq]);
+
+      const draft = openDraft([
+        [2, -1],
+        [2, 5],
+      ]);
+      const result = await editor.resolveOverlapsWithDraft(sq.id, draft);
+      const createdIds = result.created.map((p) => p.id);
+
+      await editor.undo();
+
+      // Original polygon restored
+      expect(editor.getPolygon(sq.id)!.geometry).toEqual(sq.geometry);
+      // Created polygons removed
+      for (const cid of createdIds) {
+        expect(editor.getPolygon(cid)).toBeNull();
+      }
+    });
+
+    it("calls storageAdapter.batchWrite with correct data", async () => {
+      const sq = makeSquareAt("a", 0, 0, 4);
+      const { editor, adapter } = await createEditor([sq]);
+
+      const draft = openDraft([
+        [2, -1],
+        [2, 5],
+      ]);
+      await editor.resolveOverlapsWithDraft(sq.id, draft);
+
+      expect(adapter.batchWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          createdPolygons: expect.arrayContaining([
+            expect.objectContaining({ geometry: expect.any(Object) }),
+          ]),
+          deletedPolygonIds: [],
+          modifiedPolygons: expect.arrayContaining([
+            expect.objectContaining({ id: sq.id }),
+          ]),
+        }),
+      );
+    });
+  });
 });

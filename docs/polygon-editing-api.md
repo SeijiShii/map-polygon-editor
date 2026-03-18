@@ -167,6 +167,7 @@ draft = addPoint(draft, snappedPoint);
 | `bridgePolygons` | 任意の2つの Polygon。元ポリゴンは変更されない |
 | `sharedEdgeMove` | 任意の Polygon。影響は全ポリゴンに及ぶ |
 | `resolveOverlaps` | 2つ以上の Polygon。元ポリゴンは縮小（ID維持）、交差部は新規 |
+| `resolveOverlapsWithDraft` | 任意の Polygon + 未確定ドラフト。交錯部を閉領域として切り出し |
 | `renamePolygon` | 任意の Polygon |
 | `deletePolygon` | 任意の Polygon |
 
@@ -575,6 +576,61 @@ resolveOverlaps(
 | **微小スライバー** | 面積が極小（< 1e-12）の結果は自動破棄 |
 | **Undo** | 元ポリゴンの geometry を復元し、交差ポリゴンを削除 |
 | **coordIndex** | 更新されたポリゴンは再インデックスされる |
+
+### ドラフトとのオーバーラップ解決
+
+描画中のドラフト線（未確定ポリライン）が既存ポリゴンと交錯した場合に、
+交差部分を個別のポリゴンとして切り出し、残りをドラフト断片として返す。
+
+```
+DraftOverlapResult {
+  modified        : MapPolygon,     // 縮小された元ポリゴン（ID保持）
+  created         : MapPolygon[],   // ドラフト+ポリゴン辺で囲まれた新ポリゴン群
+  remainingDrafts : DraftShape[],   // 閉じなかった残りのドラフト断片
+}
+
+resolveOverlapsWithDraft(
+  polygonId : PolygonID,
+  draft     : DraftShape       // isClosed = false（ポリライン）、2点以上
+) → Promise<DraftOverlapResult>
+```
+
+**動作:**
+
+1. ドラフト線と対象ポリゴンの全辺の交差点を検出し、ドラフト上のパラメータ順でソートする
+2. 連続する交差点ペアごとに、ドラフトセグメントがポリゴン内部にあるか判定する
+3. 内部セグメントに対して、ドラフト経路 + ポリゴン境界ウォーク（短い方向）で閉じたリングを構築し、新ポリゴンとして生成する
+4. 元ポリゴンから生成した閉領域を polyclip-ts の difference で除去し、geometry を更新する（ID 維持）
+5. ポリゴン外部のドラフト断片を `DraftShape[]` として返す
+
+**例: 水平ドラフトが矩形ポリゴンを横断**
+
+```
+入力:
+  polygon: [0,0]-[4,0]-[4,4]-[0,4]（面積16）
+  draft:   (-1,2) → (5,2)  ← 左辺と右辺で交差
+
+結果:
+  modified:        元ポリゴンの上半分または下半分（面積8, ID維持）
+  created:         [もう片方の半分（面積8, 新規ID）]
+  remainingDrafts: [(-1,2)→(0,2), (4,2)→(5,2)]  ← 外側の断片2本
+```
+
+**交差なし・交差点不足の場合:**
+
+交差点が2個未満の場合は何も変更せず、ドラフト全体を `remainingDrafts` として返す。
+
+**制約・注意事項:**
+
+| 項目 | 内容 |
+|------|------|
+| **元ポリゴンの ID** | 維持される（geometry のみ更新） |
+| **閉領域ポリゴン** | display_name は空文字、ID は自動生成 |
+| **微小スライバー** | 面積が極小（< 1e-12）の結果は自動破棄 |
+| **Undo** | 元ポリゴンの geometry を復元し、閉領域ポリゴンを削除 |
+| **coordIndex** | 更新されたポリゴンは再インデックスされる |
+| **同一辺上の2交差点** | ドラフトが同じ辺から出入りするケースにも対応 |
+| **複数回横断** | 4交差点なら2閉領域、2N交差点ならN閉領域を生成 |
 
 ### 外輪郭キャッシュ（Union Cache）
 

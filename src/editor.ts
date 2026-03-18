@@ -46,6 +46,12 @@ export type BridgeResult =
   | { ok: true; polygon: MapPolygon }
   | { ok: false; draft: PersistedDraft };
 
+export interface DraftOverlapResult {
+  modified: MapPolygon;
+  created: MapPolygon[];
+  remainingDrafts: DraftShape[];
+}
+
 interface CachedUnion {
   id: UnionCacheID;
   sourcePolygonIds: PolygonID[];
@@ -1000,6 +1006,383 @@ export class MapPolygonEditor {
     }
 
     return { modified: modifiedAfters, created: allCreated };
+  }
+
+  // ============================================================
+  // Resolve Overlaps With Draft
+  // ============================================================
+
+  async resolveOverlapsWithDraft(
+    polygonId: PolygonID,
+    draft: DraftShape,
+  ): Promise<DraftOverlapResult> {
+    this.guard();
+
+    const polygon = this.polygonStore.get(polygonId);
+    if (!polygon)
+      throw new PolygonNotFoundError(`Polygon "${polygonId}" not found`);
+
+    if (draft.points.length < 2) {
+      throw new InvalidGeometryError(
+        "Draft must have at least 2 points for resolveOverlapsWithDraft",
+      );
+    }
+
+    // Convert draft points to [lng, lat] format
+    const draftCoords = draft.points.map(
+      (p) => [p.lng, p.lat] as [number, number],
+    );
+
+    const polyCoords = polygon.geometry.coordinates;
+    const polyFeature = turfPolygon(polyCoords);
+    const draftLine = turfLineString(draftCoords);
+
+    // Find all intersections between draft line and polygon boundary
+    const intersections = lineIntersect(polyFeature, draftLine);
+    const intPts = intersections.features.map(
+      (f) => f.geometry.coordinates as [number, number],
+    );
+
+    if (intPts.length < 2) {
+      // Not enough intersections to form a closed region
+      return {
+        modified: polygon,
+        created: [],
+        remainingDrafts: [draft],
+      };
+    }
+
+    // Sort intersection points by parameter along the draft polyline
+    const paramAlongDraft = (pt: [number, number]): number => {
+      let cumDist = 0;
+      for (let i = 0; i < draftCoords.length - 1; i++) {
+        const [ax, ay] = draftCoords[i]!;
+        const [bx, by] = draftCoords[i + 1]!;
+        const segLen = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        const dAP = Math.sqrt((pt[0] - ax) ** 2 + (pt[1] - ay) ** 2);
+        const dPB = Math.sqrt((bx - pt[0]) ** 2 + (by - pt[1]) ** 2);
+        if (Math.abs(dAP + dPB - segLen) < 1e-6) {
+          return cumDist + dAP;
+        }
+        cumDist += segLen;
+      }
+      return cumDist;
+    };
+
+    intPts.sort((a, b) => paramAlongDraft(a) - paramAlongDraft(b));
+
+    // Collect draft points between each pair of consecutive intersection points
+    // and determine which segments are inside the polygon
+    const outerRing = polyCoords[0]!;
+
+    // Find which edge each intersection falls on
+    const findEdgeIndex = (pt: [number, number]): number => {
+      const eps = 1e-6;
+      for (let i = 0; i < outerRing.length - 1; i++) {
+        const [ax, ay] = outerRing[i]!;
+        const [bx, by] = outerRing[i + 1]!;
+        const dAP = Math.sqrt((pt[0] - ax) ** 2 + (pt[1] - ay) ** 2);
+        const dPB = Math.sqrt((bx - pt[0]) ** 2 + (by - pt[1]) ** 2);
+        const dAB = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        if (Math.abs(dAP + dPB - dAB) < eps) {
+          return i;
+        }
+      }
+      return 0;
+    };
+
+    // Get draft points between two parameter values
+    const getDraftPointsBetween = (
+      startPt: [number, number],
+      endPt: [number, number],
+    ): number[][] => {
+      const startParam = paramAlongDraft(startPt);
+      const endParam = paramAlongDraft(endPt);
+      const result: number[][] = [startPt];
+
+      // Add draft vertices that lie between the two intersection points
+      let cumDist = 0;
+      for (let i = 0; i < draftCoords.length - 1; i++) {
+        const [ax, ay] = draftCoords[i]!;
+        const [bx, by] = draftCoords[i + 1]!;
+        const segLen = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        const nextCumDist = cumDist + segLen;
+
+        // Add the end vertex of this segment if it's between start and end params
+        if (
+          cumDist + segLen > startParam + 1e-10 &&
+          cumDist + segLen < endParam - 1e-10
+        ) {
+          result.push(draftCoords[i + 1]!);
+        }
+
+        cumDist = nextCumDist;
+      }
+
+      result.push(endPt);
+      return result;
+    };
+
+    // Build closed regions from pairs of intersection points
+    const { difference: polyClipDifference } = await import("polyclip-ts");
+
+    // Strip closing vertex from ring for index-based operations
+    const ringLen = outerRing.length - 1; // non-closed length
+
+    const now = new Date();
+    const createdPolygons: MapPolygon[] = [];
+
+    // Process pairs of consecutive intersection points
+    for (let i = 0; i < intPts.length - 1; i++) {
+      const iPt = intPts[i]!;
+      const jPt = intPts[i + 1]!;
+
+      // Check if the draft segment between these intersections is inside.
+      // Use a point along the actual draft path (not the straight midpoint)
+      // because both intersections may lie on the same edge.
+      const segPoints = getDraftPointsBetween(iPt, jPt);
+      let isInside = false;
+      if (segPoints.length >= 3) {
+        // Use an interior draft vertex as the test point
+        const testPt = segPoints[Math.floor(segPoints.length / 2)]!;
+        isInside = booleanPointInPolygon(
+          testPt as [number, number],
+          polyFeature,
+          { ignoreBoundary: true },
+        );
+      } else {
+        // Only two points (start/end) — use midpoint
+        const mid: [number, number] = [
+          (iPt[0] + jPt[0]) / 2,
+          (iPt[1] + jPt[1]) / 2,
+        ];
+        isInside = booleanPointInPolygon(mid, polyFeature, {
+          ignoreBoundary: true,
+        });
+      }
+      if (!isInside) {
+        continue;
+      }
+
+      // Get draft points for this interior segment
+      const draftSegment = getDraftPointsBetween(iPt, jPt);
+
+      // Find edge indices for boundary walk
+      const iEdge = findEdgeIndex(iPt);
+      const jEdge = findEdgeIndex(jPt);
+
+      // Build boundary walk from jPt back to iPt (short way around)
+      // We need to find the vertex indices closest to intersection points
+      // iPt is on edge iEdge (between outerRing[iEdge] and outerRing[iEdge+1])
+      // jPt is on edge jEdge (between outerRing[jEdge] and outerRing[jEdge+1])
+
+      // Build closed ring: draft segment + boundary walk
+      // Try both directions around the polygon boundary to find the shorter path
+      // Walk polygon boundary from fromPt (on fromEdge) to toPt (on toEdge).
+      // Forward = increasing vertex index; Backward = decreasing.
+      // fromPt is on edge fromEdge (between ring[fromEdge] and ring[fromEdge+1]).
+      // toPt is on edge toEdge (between ring[toEdge] and ring[toEdge+1]).
+      const buildBoundaryPath = (
+        fromPt: [number, number],
+        fromEdge: number,
+        toPt: [number, number],
+        toEdge: number,
+        direction: "forward" | "backward",
+      ): number[][] => {
+        const path: number[][] = [fromPt];
+        if (direction === "forward") {
+          // Forward: visit ring[(fromEdge+1)%n], ..., ring[toEdge%n]
+          let idx = (fromEdge + 1) % ringLen;
+          const stopIdx = (toEdge + 1) % ringLen;
+          while (idx !== stopIdx) {
+            path.push(outerRing[idx]!);
+            idx = (idx + 1) % ringLen;
+          }
+        } else {
+          // Backward: visit ring[fromEdge%n], ..., ring[(toEdge+1)%n]
+          if (fromEdge !== toEdge) {
+            let current = fromEdge;
+            const stopIdx = toEdge;
+            while (current !== stopIdx) {
+              path.push(outerRing[current]!);
+              current = (current - 1 + ringLen) % ringLen;
+            }
+          }
+        }
+        path.push(toPt);
+        return path;
+      };
+
+      const fwdPath = buildBoundaryPath(jPt, jEdge, iPt, iEdge, "forward");
+      const bwdPath = buildBoundaryPath(jPt, jEdge, iPt, iEdge, "backward");
+
+      // Choose shorter boundary path
+      const boundaryPath = fwdPath.length <= bwdPath.length ? fwdPath : bwdPath;
+
+      // Assemble closed ring: draft segment + boundary walk
+      const ring = [
+        ...draftSegment,
+        ...boundaryPath.slice(1),
+        draftSegment[0]!,
+      ];
+
+      // Check area (skip slivers)
+      const area = Math.abs(this.shoelaceArea(ring as [number, number][]));
+      if (area < 1e-12) continue;
+
+      // Ensure CCW winding
+      if (this.shoelaceArea(ring as [number, number][]) < 0) {
+        ring.reverse();
+      }
+
+      const newPoly: MapPolygon = {
+        id: makePolygonID(crypto.randomUUID()),
+        geometry: { type: "Polygon" as const, coordinates: [ring] },
+        display_name: "",
+        created_at: now,
+        updated_at: now,
+      };
+      createdPolygons.push(newPoly);
+    }
+
+    if (createdPolygons.length === 0) {
+      return {
+        modified: polygon,
+        created: [],
+        remainingDrafts: [draft],
+      };
+    }
+
+    // Subtract created polygons from original polygon using polyclip-ts
+    let remainingCoords: [number, number][][][] = [
+      polyCoords as [number, number][][],
+    ];
+    for (const cp of createdPolygons) {
+      const cpCoords = cp.geometry.coordinates as [number, number][][];
+      remainingCoords = polyClipDifference(remainingCoords, cpCoords);
+      if (remainingCoords.length === 0) break;
+    }
+
+    // Update original polygon
+    const before = { ...polygon, geometry: { ...polygon.geometry } };
+    const after: MapPolygon = {
+      ...polygon,
+      geometry: {
+        type: "Polygon" as const,
+        coordinates:
+          remainingCoords.length > 0
+            ? remainingCoords[0]!
+            : polygon.geometry.coordinates,
+      },
+      updated_at: now,
+    };
+
+    this.unindexPolygon(polygon);
+    this.polygonStore.update(after);
+    this.indexPolygon(after);
+
+    // Add created polygons
+    for (const p of createdPolygons) {
+      this.polygonStore.add(p);
+      this.indexPolygon(p);
+    }
+
+    // History
+    this.pushHistory({
+      createdPolygons,
+      deletedPolygons: [],
+      modifiedPolygons: [{ before, after }],
+    });
+
+    // Persist
+    await this.storageAdapter.batchWrite({
+      createdPolygons,
+      deletedPolygonIds: [],
+      modifiedPolygons: [after],
+    });
+
+    // Invalidate caches
+    this.invalidateUnionCaches(polygonId);
+
+    // Build remaining draft segments (parts of draft outside polygon)
+    const remainingDrafts: DraftShape[] = [];
+
+    // Collect outside segments
+    // Before first intersection
+    const firstParam = paramAlongDraft(intPts[0]!);
+    if (firstParam > 1e-10) {
+      const pts: { lat: number; lng: number }[] = [];
+      let cumDist = 0;
+      for (let i = 0; i < draftCoords.length; i++) {
+        if (cumDist < firstParam - 1e-10) {
+          pts.push({ lat: draftCoords[i]![1], lng: draftCoords[i]![0] });
+        }
+        if (i < draftCoords.length - 1) {
+          const [ax, ay] = draftCoords[i]!;
+          const [bx, by] = draftCoords[i + 1]!;
+          cumDist += Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        }
+      }
+      // Add the first intersection point
+      pts.push({ lat: intPts[0]![1], lng: intPts[0]![0] });
+      if (pts.length >= 2) {
+        remainingDrafts.push({ points: pts, isClosed: false });
+      }
+    }
+
+    // Between pairs of intersections (outside segments)
+    for (let i = 0; i < intPts.length - 1; i++) {
+      const iPt = intPts[i]!;
+      const jPt = intPts[i + 1]!;
+      const mid: [number, number] = [
+        (iPt[0] + jPt[0]) / 2,
+        (iPt[1] + jPt[1]) / 2,
+      ];
+      if (!booleanPointInPolygon(mid, polyFeature, { ignoreBoundary: true })) {
+        // This segment is outside — collect as remaining draft
+        const segPts = getDraftPointsBetween(iPt, jPt);
+        const draftPts = segPts.map((c) => ({ lat: c[1]!, lng: c[0]! }));
+        if (draftPts.length >= 2) {
+          remainingDrafts.push({ points: draftPts, isClosed: false });
+        }
+      }
+    }
+
+    // After last intersection
+    const lastPt = intPts[intPts.length - 1]!;
+    const lastParam = paramAlongDraft(lastPt);
+    let totalDraftLen = 0;
+    for (let i = 0; i < draftCoords.length - 1; i++) {
+      const [ax, ay] = draftCoords[i]!;
+      const [bx, by] = draftCoords[i + 1]!;
+      totalDraftLen += Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+    }
+    if (totalDraftLen - lastParam > 1e-10) {
+      const pts: { lat: number; lng: number }[] = [
+        { lat: lastPt[1], lng: lastPt[0] },
+      ];
+      let cumDist = 0;
+      for (let i = 0; i < draftCoords.length - 1; i++) {
+        const [ax, ay] = draftCoords[i]!;
+        const [bx, by] = draftCoords[i + 1]!;
+        cumDist += Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+        if (cumDist > lastParam + 1e-10) {
+          pts.push({
+            lat: draftCoords[i + 1]![1],
+            lng: draftCoords[i + 1]![0],
+          });
+        }
+      }
+      if (pts.length >= 2) {
+        remainingDrafts.push({ points: pts, isClosed: false });
+      }
+    }
+
+    return {
+      modified: after,
+      created: createdPolygons,
+      remainingDrafts,
+    };
   }
 
   /** Shoelace formula for signed area of a ring. */
