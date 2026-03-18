@@ -24,7 +24,7 @@
 
 ```
 Test Files  9 passed (9)
-     Tests  256 passed (256)
+     Tests  292 passed (292)
 ```
 
 ---
@@ -41,7 +41,7 @@ Test Files  9 passed (9)
 | `src/geometry/compute-union.ts` | — | 純粋関数（Editor テストでカバー） |
 | `src/geometry/bridge-polygon.ts` | 13 | 2ポリゴン間ブリッジのジオメトリ演算 |
 | `src/geometry/detect-loop.ts` | 8 | ドラフト＋ポリゴン境界の閉回路検出 |
-| `src/editor.ts` | 78 | MapPolygonEditor ファサード（全 API 実装済み） |
+| `src/editor.ts` | 89 | MapPolygonEditor ファサード（全 API 実装済み） |
 | `src/draft/draft-operations.ts` | 42 | v1 から流用 |
 | `src/draft/validate-draft.ts` | 27 | v1 から流用 |
 | `src/draft/draft-store.ts` | 29 | v1 から流用 |
@@ -60,6 +60,7 @@ Test Files  9 passed (9)
 | `expandWithPolygon` | ✅ 完了 | |
 | `bridgePolygons` | ✅ 完了 | 3段階判定: 直接ブリッジ → 閉回路検出 → ドラフト保存 |
 | `resolveOverlaps` | ✅ 完了 | N個対応、べき集合分解、元ID維持 |
+| `resolveOverlapsWithDraft` | ✅ 完了 | ドラフト交錯時の閉領域分割、残りドラフト返却 |
 | Union Cache（基本） | ✅ 完了 | computeUnion, getCachedUnion, deleteCachedUnion |
 | Union Cache（階層） | ✅ 完了 | computeUnionFromCaches, カスケーディング dirty 伝播 |
 
@@ -84,3 +85,4 @@ Test Files  9 passed (9)
 | 2026-03-09 | splitPolygon 強化: ヒゲ自動除去、1交差頂点挿入、2N交差マルチセグメント分割。sharedEdgeMove epsilon比較 |
 | 2026-03-14 | Group 概念廃止: アプリ層に委譲。Union Cache API 追加（基本＋階層キャッシュ、カスケーディング dirty 伝播）。220テスト |
 | 2026-03-15 | `bridgePolygons` 追加（3段階判定）: (1) 共有辺による直接ブリッジ (2) ドラフト＋ポリゴン境界の閉回路 BFS 検出 (3) ドラフト保存。`NoSharedEdgeError` 追加。ドラフト端点インデックス導入。256テスト |
+| 2026-03-18 | `resolveOverlapsWithDraft` 追加: ドラフト線と既存ポリゴンの交錯部を閉領域として分割。境界ウォーク＋polyclip差分。292テスト |
