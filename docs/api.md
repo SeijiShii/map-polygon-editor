@@ -1,6 +1,51 @@
 # map-polygon-editor API Reference
 
-Network-based polygon editor. Vertices + edges form a network; closed cycles become polygons automatically.
+## Core Concepts
+
+### Network Model
+
+データの中心概念は**ネットワーク**（頂点と線分の集合）。ポリゴンはネットワーク内の閉回路から自動導出されるスナップショットである。
+
+```
+Vertex (頂点)          ─ 緯度経度 + UUID
+  ↕ Edge (線分)で接続
+Vertex (頂点)          ─ 2頂点の無向ペア + UUID
+  ↓ 閉回路を検出
+PolygonSnapshot        ─ 線分の順序付きリスト + UUID
+```
+
+- 頂点と線分を自由に追加/削除する → ライブラリが閉回路を自動検出してポリゴンを生成・更新・削除する
+- アプリ層は「ポリゴンを作る」のではなく「線分を引く」。ポリゴンは結果として現れる
+- ポリゴンUUIDはアプリ層のデータ（名称、メタデータ等）と紐づけるための識別子。メタデータ管理はアプリ層の責任
+
+### ChangeSet駆動
+
+全操作メソッドは `ChangeSet` を同期的に返す。これはネットワークとポリゴンの差分情報で、アプリ層はこれを使って地図レイヤーを差分更新する。
+
+```
+アプリ層                      ライブラリ
+  │                              │
+  │── placeVertex(lat, lng) ────→│
+  │                              │── ネットワーク更新
+  │                              │── 交差検出・分割
+  │                              │── 閉回路検出
+  │                              │── ポリゴンスナップショット更新
+  │←── ChangeSet ────────────────│
+  │                              │
+  │── ChangeSetを使って          │
+  │   Leafletレイヤーを差分更新  │
+```
+
+1つのユーザー操作で交差分割やポリゴン生成が連鎖しても、すべて1つのChangeSetにまとまって返る。Undoもこの単位で巻き戻す。
+
+### 描画モードと編集モード
+
+2つのモードは排他的。
+
+- **描画モード** (`startDrawing` → `placeVertex`... → `snapToVertex`/`endDrawing`): 線分を順次追加する
+- **編集モード** (idle状態で `moveVertex`, `removeVertex` 等): 既存の頂点・線分を操作する
+
+スナップ判定（クリック位置に最も近い頂点/線分を見つける）はライブラリの `findNearestVertex` / `findNearestEdge` を呼び、ピクセル→度数の変換はアプリ層が行う。
 
 ## Install & Import
 
