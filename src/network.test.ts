@@ -58,7 +58,9 @@ describe("Network", () => {
     });
 
     it("should throw if vertex does not exist", () => {
-      expect(() => network.removeVertex(createVertexID("nonexistent"))).toThrow();
+      expect(() =>
+        network.removeVertex(createVertexID("nonexistent")),
+      ).toThrow();
     });
   });
 
@@ -78,7 +80,9 @@ describe("Network", () => {
     });
 
     it("should throw if vertex does not exist", () => {
-      expect(() => network.moveVertex(createVertexID("nonexistent"), 0, 0)).toThrow();
+      expect(() =>
+        network.moveVertex(createVertexID("nonexistent"), 0, 0),
+      ).toThrow();
     });
   });
 
@@ -113,7 +117,9 @@ describe("Network", () => {
 
     it("should throw if vertex does not exist", () => {
       const v1 = network.addVertex(35.0, 139.0);
-      expect(() => network.addEdge(v1.id, createVertexID("nonexistent"))).toThrow();
+      expect(() =>
+        network.addEdge(v1.id, createVertexID("nonexistent")),
+      ).toThrow();
     });
 
     it("should accept an optional ID", () => {
@@ -194,6 +200,66 @@ describe("Network", () => {
       const v1 = network.addVertex(35.0, 139.0);
       const v2 = network.addVertex(35.1, 139.1);
       expect(network.getVertexPairEdge(v1.id, v2.id)).toBeUndefined();
+    });
+  });
+
+  describe("findNearestVertex", () => {
+    it("should find the nearest vertex within radius", () => {
+      network.addVertex(0, 0);
+      const v2 = network.addVertex(1, 0);
+      network.addVertex(5, 5);
+      const result = network.findNearestVertex(0.9, 0.1, 0.5);
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(v2.id);
+    });
+
+    it("should return null if no vertex within radius", () => {
+      network.addVertex(0, 0);
+      const result = network.findNearestVertex(10, 10, 1);
+      expect(result).toBeNull();
+    });
+
+    it("should return null for empty network", () => {
+      const result = network.findNearestVertex(0, 0, 10);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("findNearestEdge", () => {
+    it("should find the nearest edge within radius", () => {
+      const v1 = network.addVertex(0, 0);
+      const v2 = network.addVertex(0, 2);
+      const e = network.addEdge(v1.id, v2.id);
+      // Point (0.1, 1) is close to the edge (0,0)-(0,2)
+      const result = network.findNearestEdge(0.1, 1, 0.5);
+      expect(result).not.toBeNull();
+      expect(result!.edge.id).toBe(e.id);
+      expect(result!.point.lat).toBeCloseTo(0);
+      expect(result!.point.lng).toBeCloseTo(1);
+    });
+
+    it("should return null if no edge within radius", () => {
+      const v1 = network.addVertex(0, 0);
+      const v2 = network.addVertex(0, 2);
+      network.addEdge(v1.id, v2.id);
+      const result = network.findNearestEdge(10, 10, 1);
+      expect(result).toBeNull();
+    });
+
+    it("should return null for empty network", () => {
+      const result = network.findNearestEdge(0, 0, 10);
+      expect(result).toBeNull();
+    });
+
+    it("should clamp projection to edge endpoints", () => {
+      const v1 = network.addVertex(0, 0);
+      const v2 = network.addVertex(0, 2);
+      network.addEdge(v1.id, v2.id);
+      // Point (0, -0.5) projects before edge start
+      const result = network.findNearestEdge(0, -0.5, 1);
+      expect(result).not.toBeNull();
+      expect(result!.point.lat).toBeCloseTo(0);
+      expect(result!.point.lng).toBeCloseTo(0);
     });
   });
 

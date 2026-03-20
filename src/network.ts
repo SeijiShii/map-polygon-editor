@@ -128,9 +128,86 @@ export class Network {
     return this.pairIndex.get(this.makePairKey(v1, v2));
   }
 
+  // --- Nearest queries ---
+
+  findNearestVertex(lat: number, lng: number, radius: number): Vertex | null {
+    let best: Vertex | null = null;
+    let bestDist = radius;
+    for (const v of this.vertices.values()) {
+      const d = Math.hypot(v.lat - lat, v.lng - lng);
+      if (d < bestDist) {
+        bestDist = d;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  findNearestEdge(
+    lat: number,
+    lng: number,
+    radius: number,
+  ): {
+    edge: Edge;
+    point: { lat: number; lng: number };
+    distance: number;
+  } | null {
+    let best: {
+      edge: Edge;
+      point: { lat: number; lng: number };
+      distance: number;
+    } | null = null;
+    let bestDist = radius;
+    for (const edge of this.edges.values()) {
+      const v1 = this.vertices.get(edge.v1)!;
+      const v2 = this.vertices.get(edge.v2)!;
+      const proj = projectPointOnSegment(
+        lat,
+        lng,
+        v1.lat,
+        v1.lng,
+        v2.lat,
+        v2.lng,
+      );
+      if (proj.distance < bestDist) {
+        bestDist = proj.distance;
+        best = {
+          edge,
+          point: { lat: proj.lat, lng: proj.lng },
+          distance: proj.distance,
+        };
+      }
+    }
+    return best;
+  }
+
   // --- Internal ---
 
   private makePairKey(v1: VertexID, v2: VertexID): string {
     return v1 < v2 ? `${v1}:${v2}` : `${v2}:${v1}`;
   }
+}
+
+/** Project point (px, py) onto segment (ax, ay)-(bx, by), clamped to endpoints. */
+function projectPointOnSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { lat: number; lng: number; distance: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) {
+    // Degenerate edge (zero length)
+    const d = Math.hypot(px - ax, py - ay);
+    return { lat: ax, lng: ay, distance: d };
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  const projLat = ax + t * dx;
+  const projLng = ay + t * dy;
+  const distance = Math.hypot(px - projLat, py - projLng);
+  return { lat: projLat, lng: projLng, distance };
 }

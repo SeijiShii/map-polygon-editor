@@ -94,10 +94,7 @@ export class NetworkPolygonEditor {
       return cs;
     }
     // Non-drawing mode: connect two vertices (edit operation)
-    const cs = this.operations.snapToVertex(
-      vertexId,
-      vertexId,
-    ); // This doesn't make sense — need fromId
+    const cs = this.operations.snapToVertex(vertexId, vertexId); // This doesn't make sense — need fromId
     this.undoRedo.push(cs);
     return cs;
   }
@@ -139,6 +136,14 @@ export class NetworkPolygonEditor {
 
   // --- Undo/Redo ---
 
+  canUndo(): boolean {
+    return this.undoRedo.canUndo();
+  }
+
+  canRedo(): boolean {
+    return this.undoRedo.canRedo();
+  }
+
   undo(): ChangeSet | null {
     return this.undoRedo.undo();
   }
@@ -167,6 +172,22 @@ export class NetworkPolygonEditor {
 
   getEdge(id: EdgeID): Edge | null {
     return this.network.getEdge(id);
+  }
+
+  findNearestVertex(lat: number, lng: number, radius: number): Vertex | null {
+    return this.network.findNearestVertex(lat, lng, radius);
+  }
+
+  findNearestEdge(
+    lat: number,
+    lng: number,
+    radius: number,
+  ): {
+    edge: Edge;
+    point: { lat: number; lng: number };
+    distance: number;
+  } | null {
+    return this.network.findNearestEdge(lat, lng, radius);
   }
 
   getPolygonGeoJSON(id: PolygonID): Polygon | null {

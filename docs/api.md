@@ -97,6 +97,8 @@ Call these between `startDrawing()` and drawing end. Drawing ends automatically 
 
 | Method | Returns | Description |
 |--------|---------|-------------|
+| `canUndo()` | `boolean` | Whether undo stack is non-empty |
+| `canRedo()` | `boolean` | Whether redo stack is non-empty |
 | `undo()` | `ChangeSet \| null` | Undo last user operation (including auto-splits) |
 | `redo()` | `ChangeSet \| null` | Redo |
 
@@ -109,6 +111,8 @@ Call these between `startDrawing()` and drawing end. Drawing ends automatically 
 | `getPolygons()` | `PolygonSnapshot[]` | All polygons |
 | `getVertex(id)` | `Vertex \| null` | Single vertex |
 | `getEdge(id)` | `Edge \| null` | Single edge |
+| `findNearestVertex(lat, lng, radius)` | `Vertex \| null` | Nearest vertex within radius (degree units) |
+| `findNearestEdge(lat, lng, radius)` | `{edge, point, distance} \| null` | Nearest edge within radius. `point` = closest point on edge |
 | `getPolygonGeoJSON(id)` | `GeoJSON.Polygon \| null` | Polygon as GeoJSON (with holes) |
 | `getAllGeoJSON()` | `GeoJSON.FeatureCollection` | All polygons as FeatureCollection |
 

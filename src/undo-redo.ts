@@ -17,6 +17,14 @@ export class UndoRedoManager {
     private polygonManager: PolygonManager,
   ) {}
 
+  canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
   push(cs: ChangeSet): void {
     this.undoStack.push(cs);
     this.redoStack = []; // new operation clears redo
@@ -120,9 +128,17 @@ export class UndoRedoManager {
     // Re-add removed edges (need full edge data)
     for (const edgeId of cs.edges.removed) {
       const edgeData = this.findEdgeData(edgeId);
-      if (edgeData && this.network.getVertex(edgeData.v1) && this.network.getVertex(edgeData.v2)) {
+      if (
+        edgeData &&
+        this.network.getVertex(edgeData.v1) &&
+        this.network.getVertex(edgeData.v2)
+      ) {
         if (!this.network.getVertexPairEdge(edgeData.v1, edgeData.v2)) {
-          const edge = this.network.addEdge(edgeData.v1, edgeData.v2, edgeData.id);
+          const edge = this.network.addEdge(
+            edgeData.v1,
+            edgeData.v2,
+            edgeData.id,
+          );
           result.edges.added.push(edge);
         }
       }

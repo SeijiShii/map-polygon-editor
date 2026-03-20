@@ -34,9 +34,7 @@ describe("NetworkPolygonEditor", () => {
 
       // Get first vertex to snap back
       const vertices = editor.getVertices();
-      const firstVertex = vertices.find(
-        (v) => v.lat === 0 && v.lng === 0,
-      )!;
+      const firstVertex = vertices.find((v) => v.lat === 0 && v.lng === 0)!;
       const cs = editor.snapToVertex(firstVertex.id);
 
       expect(editor.getMode()).toBe("idle");
@@ -119,6 +117,49 @@ describe("NetworkPolygonEditor", () => {
       editor.redo();
       expect(editor.getVertices()).toHaveLength(1);
     });
+
+    it("canUndo/canRedo should reflect state", () => {
+      expect(editor.canUndo()).toBe(false);
+      expect(editor.canRedo()).toBe(false);
+
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.endDrawing();
+      expect(editor.canUndo()).toBe(true);
+      expect(editor.canRedo()).toBe(false);
+
+      editor.undo();
+      expect(editor.canUndo()).toBe(false);
+      expect(editor.canRedo()).toBe(true);
+
+      editor.redo();
+      expect(editor.canUndo()).toBe(true);
+      expect(editor.canRedo()).toBe(false);
+    });
+  });
+
+  describe("nearest queries", () => {
+    it("findNearestVertex should find closest vertex", () => {
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(1, 0);
+      editor.endDrawing();
+
+      const result = editor.findNearestVertex(0.1, 0.1, 0.5);
+      expect(result).not.toBeNull();
+      expect(result!.lat).toBe(0);
+    });
+
+    it("findNearestEdge should find closest edge", () => {
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(0, 2);
+      editor.endDrawing();
+
+      const result = editor.findNearestEdge(0.1, 1, 0.5);
+      expect(result).not.toBeNull();
+      expect(result!.point.lng).toBeCloseTo(1);
+    });
   });
 
   describe("GeoJSON export", () => {
@@ -128,9 +169,7 @@ describe("NetworkPolygonEditor", () => {
       editor.placeVertex(1, 0);
       editor.placeVertex(0.5, 1);
       const vertices = editor.getVertices();
-      const first = vertices.find(
-        (v) => v.lat === 0 && v.lng === 0,
-      )!;
+      const first = vertices.find((v) => v.lat === 0 && v.lng === 0)!;
       editor.snapToVertex(first.id);
 
       const polygon = editor.getPolygons()[0]!;
@@ -145,9 +184,7 @@ describe("NetworkPolygonEditor", () => {
       editor.placeVertex(1, 0);
       editor.placeVertex(0.5, 1);
       const vertices = editor.getVertices();
-      const first = vertices.find(
-        (v) => v.lat === 0 && v.lng === 0,
-      )!;
+      const first = vertices.find((v) => v.lat === 0 && v.lng === 0)!;
       editor.snapToVertex(first.id);
 
       const fc = editor.getAllGeoJSON();
@@ -187,9 +224,7 @@ describe("NetworkPolygonEditor", () => {
       editor.placeVertex(1, 0);
       editor.placeVertex(0.5, 1);
       const vertices = editor.getVertices();
-      const first = vertices.find(
-        (v) => v.lat === 0 && v.lng === 0,
-      )!;
+      const first = vertices.find((v) => v.lat === 0 && v.lng === 0)!;
       editor.snapToVertex(first.id);
 
       // Save
@@ -208,9 +243,7 @@ describe("NetworkPolygonEditor", () => {
       editorWithAdapter.placeVertex(1, 0);
       editorWithAdapter.placeVertex(0.5, 1);
       const verts = editorWithAdapter.getVertices();
-      const firstV = verts.find(
-        (v) => v.lat === 0 && v.lng === 0,
-      )!;
+      const firstV = verts.find((v) => v.lat === 0 && v.lng === 0)!;
       editorWithAdapter.snapToVertex(firstV.id);
       await editorWithAdapter.save();
 
