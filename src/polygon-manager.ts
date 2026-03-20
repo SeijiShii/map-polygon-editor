@@ -304,8 +304,20 @@ export class PolygonManager {
     const firstEdge = network.getEdge(edgeIds[0]!);
     if (!firstEdge) return null;
 
-    // Determine starting vertex
-    let currentVertex = firstEdge.v1;
+    // Determine starting vertex by checking which endpoint of the first edge
+    // is NOT shared with the second edge (shared vertex = end of first edge)
+    let currentVertex: VertexID;
+    if (edgeIds.length >= 2) {
+      const secondEdge = network.getEdge(edgeIds[1]!);
+      if (!secondEdge) return null;
+      if (firstEdge.v1 === secondEdge.v1 || firstEdge.v1 === secondEdge.v2) {
+        currentVertex = firstEdge.v2;
+      } else {
+        currentVertex = firstEdge.v1;
+      }
+    } else {
+      currentVertex = firstEdge.v1;
+    }
     vertices.push(currentVertex);
 
     for (const edgeId of edgeIds) {

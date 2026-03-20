@@ -133,13 +133,15 @@ describe("PolygonManager", () => {
       // Find the larger polygon's ID
       const polygons = manager.getAllPolygons();
       const larger = polygons.reduce((a, b) => {
-        const aFace = faces.find((f) =>
-          f.edgeIds.length === a.edgeIds.length &&
-          f.edgeIds.every((id) => a.edgeIds.includes(id)),
+        const aFace = faces.find(
+          (f) =>
+            f.edgeIds.length === a.edgeIds.length &&
+            f.edgeIds.every((id) => a.edgeIds.includes(id)),
         );
-        const bFace = faces.find((f) =>
-          f.edgeIds.length === b.edgeIds.length &&
-          f.edgeIds.every((id) => b.edgeIds.includes(id)),
+        const bFace = faces.find(
+          (f) =>
+            f.edgeIds.length === b.edgeIds.length &&
+            f.edgeIds.every((id) => b.edgeIds.includes(id)),
         );
         return (aFace?.signedArea ?? 0) >= (bFace?.signedArea ?? 0) ? a : b;
       });
@@ -285,6 +287,74 @@ describe("PolygonManager", () => {
       const geojson = manager.toGeoJSON(polygon.id, network);
       expect(geojson).not.toBeNull();
       expect(geojson!.coordinates).toHaveLength(2); // outer ring + 1 hole
+    });
+
+    it("should produce a closed GeoJSON ring (first coord === last coord)", () => {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      const polygon = manager.getAllPolygons()[0]!;
+
+      const geojson = manager.toGeoJSON(polygon.id, network);
+      expect(geojson).not.toBeNull();
+      const ring = geojson!.coordinates[0]!;
+      // GeoJSON ring must be closed: first point === last point
+      expect(ring[0]).toEqual(ring[ring.length - 1]);
+    });
+
+    it("should produce a valid closed ring even when edgeIds are not in v1-chain order", () => {
+      // Simulate the scenario from the user's bug:
+      // edgeIds stored as [edge1, edge3, edge2] where the chain order differs
+      // from the naive firstEdge.v1 starting point
+      const network = new Network();
+      const v1 = network.addVertex(35.7812, 140.33289);
+      const v2 = network.addVertex(35.78034, 140.33065);
+      const v3 = network.addVertex(35.77912, 140.33273);
+
+      const e1 = network.addEdge(v1.id, v2.id); // v1↔v2
+      const e2 = network.addEdge(v2.id, v3.id); // v2↔v3
+      const e3 = network.addEdge(v3.id, v1.id); // v3↔v1
+
+      // Manually create a polygon with edgeIds in non-sequential order: [e1, e3, e2]
+      // This is the order the half-edge traversal can produce (cycle: v2→v1→v3→v2)
+      const polygonId = createPolygonID("test-polygon");
+      (manager as any).polygons.set(polygonId, {
+        id: polygonId,
+        edgeIds: [e1.id, e3.id, e2.id],
+        holes: [],
+      });
+
+      const geojson = manager.toGeoJSON(polygonId, network);
+      expect(geojson).not.toBeNull();
+      const ring = geojson!.coordinates[0]!;
+
+      // Ring must be closed
+      expect(ring[0]).toEqual(ring[ring.length - 1]);
+
+      // Ring must have 4 points (3 vertices + closing)
+      expect(ring).toHaveLength(4);
+
+      // All 3 vertices must appear in the ring (as [lng, lat])
+      const ringWithoutClosing = ring.slice(0, 3);
+      const expectedCoords = [
+        [v1.lng, v1.lat],
+        [v2.lng, v2.lat],
+        [v3.lng, v3.lat],
+      ];
+      for (const coord of expectedCoords) {
+        expect(ringWithoutClosing).toContainEqual(coord);
+      }
     });
 
     it("should export FeatureCollection", () => {
