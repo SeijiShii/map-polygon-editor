@@ -81,9 +81,7 @@ export function findIntersections(
       const totalDx = end.lat - start.lat;
       const totalDy = end.lng - start.lng;
       const t =
-        Math.abs(totalDx) > Math.abs(totalDy)
-          ? dx / totalDx
-          : dy / totalDy;
+        Math.abs(totalDx) > Math.abs(totalDy) ? dx / totalDx : dy / totalDy;
 
       results.push({ edgeId: edge.id, point, t });
     }
@@ -116,7 +114,16 @@ export function resolveIntersections(
 
   const intersections = findIntersections(v1, v2, network, excludeEdgeIds);
 
-  if (intersections.length === 0) {
+  // Also find existing vertices that lie on the new edge (vertex pass-through)
+  const passThroughVertices = findVerticesOnSegment(
+    v1,
+    v2,
+    v1Id,
+    v2Id,
+    network,
+  );
+
+  if (intersections.length === 0 && passThroughVertices.length === 0) {
     // No intersections — just add the edge
     const edge = network.addEdge(v1Id, v2Id);
     return {
@@ -152,12 +159,66 @@ export function resolveIntersections(
     }
   }
 
-  // Build chain of edges along the new line: v1 → ix1 → ix2 → ... → v2
-  const chain = [v1Id, ...intersectionVertices, v2Id];
+  // Build chain of edges along the new line: v1 → (pass-through & intersection vertices sorted by t) → v2
+  // Merge intersection vertices and pass-through vertices, sorted by t parameter
+  const allSplitPoints: Array<{ id: VertexID; t: number }> = [];
+  for (let i = 0; i < intersections.length; i++) {
+    allSplitPoints.push({
+      id: intersectionVertices[i]!,
+      t: intersections[i]!.t,
+    });
+  }
+  for (const ptv of passThroughVertices) {
+    allSplitPoints.push({ id: ptv.id, t: ptv.t });
+  }
+  allSplitPoints.sort((a, b) => a.t - b.t);
+
+  const chain = [v1Id, ...allSplitPoints.map((p) => p.id), v2Id];
   for (let i = 0; i < chain.length - 1; i++) {
+    // Skip if edge already exists (pass-through vertex may already be connected)
+    if (network.getVertexPairEdge(chain[i]!, chain[i + 1]!)) continue;
     const edge = network.addEdge(chain[i]!, chain[i + 1]!);
     addedEdges.push(edge);
   }
 
   return { addedVertices, addedEdges, removedEdgeIds };
+}
+
+/**
+ * Find existing vertices (excluding endpoints) that lie on the segment from p1 to p2.
+ * Returns vertices sorted by parameter t along the segment.
+ */
+function findVerticesOnSegment(
+  p1: Point,
+  p2: Point,
+  excludeV1: VertexID,
+  excludeV2: VertexID,
+  network: Network,
+): Array<{ id: VertexID; t: number }> {
+  const results: Array<{ id: VertexID; t: number }> = [];
+  const dx = p2.lat - p1.lat;
+  const dy = p2.lng - p1.lng;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return results;
+
+  const eps = 1e-8;
+
+  for (const v of network.getAllVertices()) {
+    if (v.id === excludeV1 || v.id === excludeV2) continue;
+
+    // Project vertex onto segment
+    const t = ((v.lat - p1.lat) * dx + (v.lng - p1.lng) * dy) / lenSq;
+    if (t <= eps || t >= 1 - eps) continue; // not interior
+
+    // Check distance from vertex to the line
+    const projLat = p1.lat + t * dx;
+    const projLng = p1.lng + t * dy;
+    const dist = Math.hypot(v.lat - projLat, v.lng - projLng);
+    if (dist < eps) {
+      results.push({ id: v.id, t });
+    }
+  }
+
+  results.sort((a, b) => a.t - b.t);
+  return results;
 }

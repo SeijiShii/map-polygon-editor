@@ -76,11 +76,17 @@ export class PolygonManager {
     const isHole = new Set<number>();
     const holeMapping = new Map<Face, Face[]>();
 
+    // Build edge sets for shared-edge detection
+    const facesEdgeSets = faces.map((f) => new Set(f.edgeIds));
+
     // Check all pairs for containment
+    // A face is a hole ONLY if it is contained AND shares no edges with the container
     for (let i = 0; i < faces.length; i++) {
       if (isHole.has(i)) continue;
       for (let j = 0; j < faces.length; j++) {
         if (i === j || isHole.has(j)) continue;
+        // Skip if faces share any edge — they are adjacent, not hole/container
+        if (setsShareAny(facesEdgeSets[i]!, facesEdgeSets[j]!)) continue;
         // Check if face j is inside face i
         if (this.faceContainsFace(faceCoords[i]!, faceCoords[j]!)) {
           isHole.add(j);
@@ -323,6 +329,13 @@ export class PolygonManager {
 // --- Utility functions ---
 
 function setsOverlap<T>(a: Set<T>, b: Set<T>): boolean {
+  for (const item of a) {
+    if (b.has(item)) return true;
+  }
+  return false;
+}
+
+function setsShareAny<T>(a: Set<T>, b: Set<T>): boolean {
   for (const item of a) {
     if (b.has(item)) return true;
   }
