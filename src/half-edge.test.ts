@@ -147,6 +147,57 @@ describe("enumerateFaces", () => {
     expect(faces[0]!.edgeIds).toHaveLength(3);
   });
 
+  it("should find 1 face when a line crosses a triangle edge into the interior (two dangling edges at intersection)", () => {
+    // Triangle A-B-C with a line from E (outside) through F (on edge AC) to D (inside)
+    // After intersection: edge AC is split into AF and FC
+    // F also connects to D (inside) and E (outside) — both dangling
+    //
+    //     A
+    //    /|\
+    //   / | \        E is outside
+    //  / D|  \      /
+    // B---+---C----F is on edge AC... wait, let me redo
+    //
+    // Actually:
+    //   A(1,2)
+    //   /    \
+    //  /  D   \     E
+    // B(0,0)--C(2,0)
+    //         |
+    //         F is on segment AC (between A and C)
+    //
+    // Corrected topology:
+    //   A(1,2)
+    //   / \
+    //  /   F(1.5,1)---E(2.5,1.5)   (F is on edge AC, E is outside)
+    // /   /  \
+    // B(0,0)--C(2,0)    D(1.2,0.6) is inside, connected to F
+    //
+    const { network } = buildNetwork(
+      [
+        /* 0: A */ [2, 1],
+        /* 1: B */ [0, 0],
+        /* 2: C */ [0, 2],
+        /* 3: F */ [1, 1.5], // on edge AC (midpoint-ish)
+        /* 4: D */ [0.6, 1.2], // inside triangle
+        /* 5: E */ [1.5, 2.5], // outside triangle
+      ],
+      [
+        [0, 1], // A-B (triangle edge)
+        [1, 2], // B-C (triangle edge)
+        [2, 3], // C-F (split of original AC)
+        [3, 0], // F-A (split of original AC)
+        [3, 4], // F-D (dangling, inside)
+        [3, 5], // F-E (dangling, outside)
+      ],
+    );
+    const faces = enumerateFaces(network);
+
+    // Should find exactly 1 face: the quadrilateral A-B-C-F
+    expect(faces).toHaveLength(1);
+    expect(faces[0]!.edgeIds).toHaveLength(4); // AB, BC, CF, FA
+  });
+
   it("should have positive area for CCW faces", () => {
     // CCW triangle
     const { network } = buildNetwork(

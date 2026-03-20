@@ -19,9 +19,13 @@ export function enumerateFaces(network: Network): Face[] {
   const allEdges = network.getAllEdges();
   if (allEdges.length === 0) return [];
 
+  // Prune dangling edges (edges where at least one endpoint has degree 1).
+  // Iterative: removing a dangling edge may create new degree-1 vertices.
+  const pruned = pruneDanglingEdges(allEdges);
+
   // Build half-edges: each undirected edge → two directed half-edges
   const halfEdges: HalfEdge[] = [];
-  for (const edge of allEdges) {
+  for (const edge of pruned) {
     halfEdges.push({ from: edge.v1, to: edge.v2, edgeId: edge.id });
     halfEdges.push({ from: edge.v2, to: edge.v1, edgeId: edge.id });
   }
@@ -105,24 +109,51 @@ export function enumerateFaces(network: Network): Face[] {
       // The outer face will have the largest negative area
       if (area > 1e-10) {
         const edgeIds = cycle.map((he) => he.edgeId);
-        // Deduplicate edge IDs (a face won't have duplicate edges in valid planar graphs,
-        // but dangling edges can cause a half-edge to appear twice)
-        const uniqueEdgeIds = [...new Set(edgeIds)];
 
         faces.push({
           halfEdges: cycle.map(
             (he) => [he.from, he.to] as [VertexID, VertexID],
           ),
-          edgeIds: uniqueEdgeIds,
+          edgeIds,
           signedArea: area,
         });
       }
     }
   }
 
-  // Filter out faces where edgeIds don't form a proper cycle
-  // (dangling edges create degenerate traversals)
-  return faces.filter((f) => f.halfEdges.length === f.edgeIds.length);
+  return faces;
+}
+
+/**
+ * Iteratively remove edges where at least one endpoint has degree 1.
+ * These "dangling" edges cannot be part of any closed face.
+ */
+function pruneDanglingEdges(
+  edges: Array<{ id: EdgeID; v1: VertexID; v2: VertexID }>,
+): Array<{ id: EdgeID; v1: VertexID; v2: VertexID }> {
+  const excluded = new Set<EdgeID>();
+  const degree = new Map<VertexID, number>();
+
+  for (const edge of edges) {
+    degree.set(edge.v1, (degree.get(edge.v1) ?? 0) + 1);
+    degree.set(edge.v2, (degree.get(edge.v2) ?? 0) + 1);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of edges) {
+      if (excluded.has(edge.id)) continue;
+      if ((degree.get(edge.v1) ?? 0) <= 1 || (degree.get(edge.v2) ?? 0) <= 1) {
+        excluded.add(edge.id);
+        degree.set(edge.v1, (degree.get(edge.v1) ?? 0) - 1);
+        degree.set(edge.v2, (degree.get(edge.v2) ?? 0) - 1);
+        changed = true;
+      }
+    }
+  }
+
+  return edges.filter((e) => !excluded.has(e.id));
 }
 
 function heKey(he: HalfEdge): string {
