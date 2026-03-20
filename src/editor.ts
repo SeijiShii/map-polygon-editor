@@ -152,6 +152,49 @@ export class NetworkPolygonEditor {
     return this.undoRedo.redo();
   }
 
+  // --- Cleanup ---
+
+  pruneOrphans(): ChangeSet {
+    const cs = emptyChangeSet();
+    // Collect all edge IDs that belong to any polygon (including holes)
+    const polygonEdgeIds = new Set<EdgeID>();
+    for (const poly of this.polygonManager.getAllPolygons()) {
+      for (const eid of poly.edgeIds) polygonEdgeIds.add(eid);
+      for (const hole of poly.holes) {
+        for (const eid of hole) polygonEdgeIds.add(eid);
+      }
+    }
+
+    // Collect all vertex IDs referenced by polygon edges
+    const polygonVertexIds = new Set<VertexID>();
+    for (const eid of polygonEdgeIds) {
+      const edge = this.network.getEdge(eid);
+      if (edge) {
+        polygonVertexIds.add(edge.v1);
+        polygonVertexIds.add(edge.v2);
+      }
+    }
+
+    // Remove orphan edges first
+    for (const edge of this.network.getAllEdges()) {
+      if (!polygonEdgeIds.has(edge.id)) {
+        this.network.removeEdge(edge.id);
+        cs.edges.removed.push(edge.id);
+      }
+    }
+
+    // Remove orphan vertices
+    for (const vertex of this.network.getAllVertices()) {
+      if (!polygonVertexIds.has(vertex.id)) {
+        this.network.removeVertex(vertex.id);
+        cs.vertices.removed.push(vertex.id);
+      }
+    }
+
+    this.undoRedo.push(cs);
+    return cs;
+  }
+
   // --- Query ---
 
   getVertices(): Vertex[] {

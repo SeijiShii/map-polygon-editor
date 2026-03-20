@@ -137,6 +137,7 @@ Call these between `startDrawing()` and drawing end. Drawing ends automatically 
 | `removeVertex(vertexId)` | `ChangeSet` | Delete vertex + all connected edges |
 | `removeEdge(edgeId)` | `ChangeSet` | Delete edge only (vertices remain) |
 | `splitEdge(edgeId, lat, lng)` | `ChangeSet` | Insert vertex on edge (splits into 2 edges) |
+| `pruneOrphans()` | `ChangeSet` | Remove all vertices and edges not belonging to any polygon |
 
 ### Undo/Redo
 

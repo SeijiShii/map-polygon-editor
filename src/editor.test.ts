@@ -257,4 +257,62 @@ describe("NetworkPolygonEditor", () => {
       expect(editor2.getPolygons()).toHaveLength(1);
     });
   });
+
+  describe("pruneOrphans", () => {
+    it("should remove vertices and edges not belonging to any polygon", () => {
+      // Draw a triangle (creates polygon)
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(1, 0);
+      editor.placeVertex(0.5, 1);
+      const first = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!;
+      editor.snapToVertex(first.id);
+      expect(editor.getPolygons()).toHaveLength(1);
+
+      // Draw an orphan line (no polygon)
+      editor.startDrawing();
+      editor.placeVertex(5, 5);
+      editor.placeVertex(6, 6);
+      editor.endDrawing();
+
+      expect(editor.getVertices()).toHaveLength(5);
+      expect(editor.getEdges()).toHaveLength(4);
+
+      const cs = editor.pruneOrphans();
+
+      expect(editor.getVertices()).toHaveLength(3);
+      expect(editor.getEdges()).toHaveLength(3);
+      expect(cs.vertices.removed).toHaveLength(2);
+      expect(cs.edges.removed).toHaveLength(1);
+      expect(editor.getPolygons()).toHaveLength(1);
+    });
+
+    it("should do nothing if all vertices belong to polygons", () => {
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(1, 0);
+      editor.placeVertex(0.5, 1);
+      const first = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!;
+      editor.snapToVertex(first.id);
+
+      const cs = editor.pruneOrphans();
+      expect(cs.vertices.removed).toHaveLength(0);
+      expect(cs.edges.removed).toHaveLength(0);
+    });
+
+    it("should remove isolated vertices", () => {
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.endDrawing();
+
+      expect(editor.getVertices()).toHaveLength(1);
+      const cs = editor.pruneOrphans();
+      expect(editor.getVertices()).toHaveLength(0);
+      expect(cs.vertices.removed).toHaveLength(1);
+    });
+  });
 });
