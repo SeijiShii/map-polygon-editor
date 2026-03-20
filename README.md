@@ -1,9 +1,8 @@
 # map-polygon-editor
 
-地図上のポリゴン編集に特化した**データ管理ライブラリ**。
+地図上のポリゴン編集に特化した**ネットワークベースのデータ管理ライブラリ**。
 
-ポリゴンのグループ管理・ジオメトリ演算・undo/redo・ストレージ抽象化を担う。
-地図の描画・入力処理はアプリ側に委譲する設計で、Google Maps・Leaflet・flutter_map など任意の地図ライブラリと組み合わせて使用できる。
+頂点と線分のネットワークを中心概念とし、閉回路を自動的にポリゴンとして検出する。地図の描画・入力処理はアプリ側に委譲する設計で、Leaflet・Google Maps など任意の地図ライブラリと組み合わせて使用できる。
 
 ## 主なユースケース
 
@@ -15,50 +14,61 @@
 
 ## 主な機能
 
-- **ポリゴン描画・編集**：頂点の追加・移動・削除、切断線による分割
-- **ポリゴン間ブリッジ**：2ポリゴンの頂点間を描画 → 共有辺またはドラフト経由の閉回路を自動検出 → 新ポリゴン生成
-- **共有境界の連動編集**：隣接ポリゴンの境界頂点を同時更新
-- **Undo / Redo**：ドラフト内・コミット済みの2レイヤー
-- **ストレージ抽象化**：`StorageAdapter` インターフェースによる永続化層の委譲
+- **ネットワークモデル**: 頂点＋線分が中心。閉回路は自動的にポリゴンになる
+- **交差自動解決**: 線分が交差すると交点に頂点を挿入し両線分を分割
+- **穴の自動検出**: 外側の閉回路に内包される閉回路はGeoJSONのinner ringになる
+- **描画/編集モード**: 排他的なモード管理。描画中は線分を順次追加、編集では頂点の移動・削除
+- **Undo/Redo**: ユーザー操作単位。自動分割も含めて1回で巻き戻し
+- **ChangeSet**: 全操作が変更差分を返す。Leafletレイヤーの同期に使用
+- **GeoJSON出力**: 個別ポリゴンまたはFeatureCollectionとして出力
+- **ストレージ抽象化**: `StorageAdapter`インターフェースによる永続化
 
 ## ドキュメント
 
 | ドキュメント | 内容 |
 |------------|------|
-| [概要](docs/overview.md) | プロジェクト概要・設計思想 |
-| [データモデル](docs/data-model.md) | Polygon・Group の型定義・木構造・制約 |
-| [ポリゴン編集 API](docs/polygon-editing-api.md) | 全 API 仕様・操作パターン・Undo/Redo・ストレージ抽象化 |
-| [v1→v2 移行ガイド](docs/migration-v1-to-v2.md) | Area+AreaLevel → Polygon+Group への移行対応表 |
+| [API リファレンス](docs/api.md) | 全メソッド仕様・型定義・Leaflet連携例 |
+| [v3 仕様](docs/experimental-v3.md) | 設計思想・データ概念・設計判断 |
+| [実装計画](docs/v3-implementation-plan.md) | フェーズ別実装計画 |
 
 ## アーキテクチャ
 
-このライブラリは地図描画を行わない。GeoJSON の入出力インターフェースを通じて任意の地図ライブラリと連携する。
-
 ```
-┌─────────────────────────────────┐
-│        map-polygon-editor        │
-│                                  │
-│  Polygon/Group管理 / undo/redo   │
-│  geometry演算 / 共有境界連動     │
-└──────────────┬───────────────────┘
-               │ GeoJSON の入出力のみ
-   ┌───────────┼────────────┐
-   ↓           ↓            ↓
-Terra Draw  flutter_map  Google Maps
-（Web）      （Flutter）  （JS/Flutter）
+┌──────────────────────────────────┐
+│       map-polygon-editor          │
+│                                   │
+│  Network (頂点+線分)              │
+│  Half-edge面列挙 → ポリゴン検出   │
+│  交差解決 / Undo/Redo / 永続化    │
+└───────────────┬──────────────────┘
+                │ ChangeSet + GeoJSON
+    ┌───────────┼────────────┐
+    ↓           ↓            ↓
+ Leaflet    Google Maps   その他
+```
+
+## クイックスタート
+
+```ts
+import { NetworkPolygonEditor } from "map-polygon-editor";
+
+const editor = new NetworkPolygonEditor();
+
+// 三角形を描画
+editor.startDrawing();
+editor.placeVertex(35.68, 139.76);
+editor.placeVertex(35.69, 139.76);
+editor.placeVertex(35.685, 139.77);
+
+// 始点にスナップ → ポリゴン自動生成
+const first = editor.getVertices()[0]!;
+const cs = editor.snapToVertex(first.id);
+// cs.polygons.created[0] にポリゴンが入る
+
+// GeoJSON出力
+const geojson = editor.getAllGeoJSON();
 ```
 
 ## ステータス
 
-v2 全 API 実装完了。256 テスト通過。
-
-### 実装済み
-
-- 型システム（PolygonID / GroupID / DraftID ブランド型）
-- PolygonStore / GroupStore（デュアルインデックス）
-- MapPolygonEditor ファサード（全 API）
-- DraftShape 操作（描画・検証・GeoJSON 変換）
-- エラー体系（12 エラークラス）
-- ジオメトリ演算: `splitPolygon`, `carveInnerPolygon`, `punchHole`, `expandWithPolygon`, `bridgePolygons`
-- 共有境界連動: `sharedEdgeMove`（座標ハッシュインデックス）
-- グループ外周取得: `getGroupPolygons`（@turf/turf Union 計算）
+v3 実装完了。115テスト通過、カバレッジ92.6%。
