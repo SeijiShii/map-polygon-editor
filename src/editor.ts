@@ -108,6 +108,45 @@ export class NetworkPolygonEditor {
     return emptyChangeSet();
   }
 
+  // --- Drag operations ---
+
+  private dragOrigin: { id: VertexID; lat: number; lng: number } | null = null;
+
+  beginDrag(vertexId: VertexID): void {
+    const v = this.network.getVertex(vertexId);
+    if (!v) throw new Error(`Vertex ${vertexId} does not exist`);
+    this.dragOrigin = { id: vertexId, lat: v.lat, lng: v.lng };
+  }
+
+  dragTo(lat: number, lng: number): ChangeSet {
+    if (!this.dragOrigin) throw new Error("No drag in progress");
+    return this.operations.moveVertexLight(this.dragOrigin.id, lat, lng);
+  }
+
+  endDrag(): ChangeSet {
+    if (!this.dragOrigin) throw new Error("No drag in progress");
+    const { id, lat: origLat, lng: origLng } = this.dragOrigin;
+    const current = this.network.getVertex(id)!;
+    const finalLat = current.lat;
+    const finalLng = current.lng;
+    this.dragOrigin = null;
+
+    // Restore to original position, then do a full moveVertex
+    // so intersection resolution runs and undo is recorded correctly
+    this.network.moveVertex(id, origLat, origLng);
+    const cs = this.operations.moveVertex(id, finalLat, finalLng);
+    this.undoRedo.push(cs);
+    return cs;
+  }
+
+  cancelDrag(): void {
+    if (!this.dragOrigin) return;
+    const { id, lat, lng } = this.dragOrigin;
+    this.dragOrigin = null;
+    // Restore original position and rebuild polygons
+    this.operations.moveVertexLight(id, lat, lng);
+  }
+
   // --- Edit operations ---
 
   moveVertex(vertexId: VertexID, lat: number, lng: number): ChangeSet {

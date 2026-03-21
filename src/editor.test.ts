@@ -138,6 +138,77 @@ describe("NetworkPolygonEditor", () => {
     });
   });
 
+  describe("drag operations", () => {
+    function makeTriangle(ed: NetworkPolygonEditor) {
+      ed.startDrawing();
+      ed.placeVertex(0, 0);
+      ed.placeVertex(1, 0);
+      ed.placeVertex(0.5, 1);
+      const first = ed.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed.snapToVertex(first.id);
+    }
+
+    it("should update polygons during drag without recording undo", () => {
+      makeTriangle(editor);
+      const vId = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!.id;
+
+      editor.beginDrag(vId);
+      editor.dragTo(0.1, 0.1);
+
+      // Vertex moved
+      expect(editor.getVertex(vId)!.lat).toBe(0.1);
+      // Polygons still exist (rebuilt)
+      expect(editor.getPolygons()).toHaveLength(1);
+      // No undo step yet for the drag
+      // Undo should revert the last pre-drag operation, not the drag
+      editor.cancelDrag();
+      expect(editor.getVertex(vId)!.lat).toBe(0);
+    });
+
+    it("should record one undo step on endDrag", () => {
+      makeTriangle(editor);
+      const vId = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!.id;
+
+      editor.beginDrag(vId);
+      editor.dragTo(0.1, 0.1);
+      editor.dragTo(0.2, 0.2);
+      editor.dragTo(0.3, 0.3);
+      editor.endDrag();
+
+      expect(editor.getVertex(vId)!.lat).toBe(0.3);
+
+      // One undo should revert the entire drag
+      editor.undo();
+      expect(editor.getVertex(vId)!.lat).toBe(0);
+    });
+
+    it("cancelDrag should restore original position", () => {
+      makeTriangle(editor);
+      const vId = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!.id;
+
+      editor.beginDrag(vId);
+      editor.dragTo(5, 5);
+      editor.cancelDrag();
+
+      expect(editor.getVertex(vId)!.lat).toBe(0);
+      expect(editor.getVertex(vId)!.lng).toBe(0);
+    });
+
+    it("should throw if dragTo called without beginDrag", () => {
+      expect(() => editor.dragTo(0, 0)).toThrow("No drag in progress");
+    });
+
+    it("should throw if endDrag called without beginDrag", () => {
+      expect(() => editor.endDrag()).toThrow("No drag in progress");
+    });
+  });
+
   describe("nearest queries", () => {
     it("findNearestVertex should find closest vertex", () => {
       editor.startDrawing();

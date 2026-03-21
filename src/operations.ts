@@ -75,6 +75,22 @@ export class Operations {
     return cs;
   }
 
+  /**
+   * Move vertex and rebuild polygons without intersection resolution.
+   * Used for live drag preview — caller is responsible for undo.
+   */
+  moveVertexLight(vertexId: VertexID, lat: number, lng: number): ChangeSet {
+    const cs = emptyChangeSet();
+    const oldPos = this.network.moveVertex(vertexId, lat, lng);
+    cs.vertices.moved.push({
+      id: vertexId,
+      from: oldPos,
+      to: { lat, lng },
+    });
+    this.rebuildPolygons(cs);
+    return cs;
+  }
+
   moveVertex(vertexId: VertexID, lat: number, lng: number): ChangeSet {
     const cs = emptyChangeSet();
     const oldPos = this.network.moveVertex(vertexId, lat, lng);
