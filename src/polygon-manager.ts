@@ -36,7 +36,11 @@ export class PolygonManager {
    * Rebuild polygon snapshots from the current set of faces.
    * Handles identity matching (split/merge), hole detection, and returns a diff.
    */
-  updateFromFaces(faces: Face[], network: Network): PolygonDiff {
+  updateFromFaces(
+    faces: Face[],
+    network: Network,
+    movedVertexIds?: Set<VertexID>,
+  ): PolygonDiff {
     const previousPolygons = new Map(this.polygons);
 
     // Step 1: Detect containment (holes)
@@ -49,8 +53,22 @@ export class PolygonManager {
       area: face.signedArea,
     }));
 
+    // Build set of edge IDs connected to moved vertices
+    const movedEdgeIds = new Set<EdgeID>();
+    if (movedVertexIds) {
+      for (const vid of movedVertexIds) {
+        for (const edge of network.getEdgesOfVertex(vid)) {
+          movedEdgeIds.add(edge.id);
+        }
+      }
+    }
+
     // Step 3: Match against previous polygons for identity
-    const diff = this.matchIdentity(newFaceData, previousPolygons);
+    const diff = this.matchIdentity(
+      newFaceData,
+      previousPolygons,
+      movedEdgeIds,
+    );
 
     return diff;
   }
@@ -135,6 +153,7 @@ export class PolygonManager {
       area: number;
     }>,
     previousPolygons: Map<PolygonID, PolygonSnapshot>,
+    movedEdgeIds: Set<EdgeID>,
   ): PolygonDiff {
     const diff: PolygonDiff = { created: [], modified: [], removed: [] };
     const usedPrevIds = new Set<PolygonID>();
@@ -180,8 +199,13 @@ export class PolygonManager {
         };
         newPolygons.set(prev.id, snap);
 
-        // Check if actually modified
+        // Check if actually modified (edge set changed, holes changed,
+        // or any edge touches a moved vertex)
+        const touchesMoved =
+          movedEdgeIds.size > 0 &&
+          newFace.edgeIds.some((eid) => movedEdgeIds.has(eid));
         if (
+          touchesMoved ||
           !edgeArraysEqual(prev.snap.edgeIds, newFace.edgeIds) ||
           !holesEqual(prev.snap.holes, newFace.holes)
         ) {

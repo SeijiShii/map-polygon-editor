@@ -181,7 +181,12 @@ export class Operations {
 
   private rebuildPolygons(cs: ChangeSet): void {
     const faces = enumerateFaces(this.network);
-    const diff = this.polygonManager.updateFromFaces(faces, this.network);
+    const movedVertexIds = new Set(cs.vertices.moved.map((m) => m.id));
+    const diff = this.polygonManager.updateFromFaces(
+      faces,
+      this.network,
+      movedVertexIds,
+    );
     cs.polygons.created.push(...diff.created);
     cs.polygons.modified.push(...diff.modified);
     cs.polygons.removed.push(...diff.removed);

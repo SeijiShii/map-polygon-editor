@@ -118,6 +118,23 @@ describe("Operations", () => {
       expect(cs.vertices.moved[0]!.to).toEqual({ lat: 1, lng: 1 });
       expect(network.getVertex(vId)!.lat).toBe(1);
     });
+
+    it("should report polygon as modified when vertex moves even if edge set unchanged", () => {
+      // Build a triangle: v0-v1-v2
+      const cs0 = ops.addVertex(0, 0);
+      const v0 = cs0.vertices.added[0]!.id;
+      const cs1 = ops.addConnectedVertex(v0, 1, 0);
+      const v1 = cs1.vertices.added[0]!.id;
+      const cs2 = ops.addConnectedVertex(v1, 0.5, 1);
+      const v2 = cs2.vertices.added[0]!.id;
+      ops.snapToVertex(v2, v0); // close triangle
+
+      expect(polygonManager.getAllPolygons()).toHaveLength(1);
+
+      // Move v0 slightly — polygon should be modified even though edge IDs are unchanged
+      const csMove = ops.moveVertexLight(v0, 0.1, 0.1);
+      expect(csMove.polygons.modified).toHaveLength(1);
+    });
   });
 
   describe("removeVertex", () => {
