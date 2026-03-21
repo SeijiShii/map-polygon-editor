@@ -42,7 +42,7 @@ PolygonSnapshot        ─ 線分の順序付きリスト + UUID
 
 2つのモードは排他的。
 
-- **描画モード** (`startDrawing` → `placeVertex`... → `snapToVertex`/`endDrawing`): 線分を順次追加する
+- **描画モード** (`startDrawing` → 描画開始 → `placeVertex`... → 描画終了): 線分を順次追加する
 - **編集モード** (idle状態で `moveVertex`, `removeVertex` 等): 既存の頂点・線分を操作する
 
 スナップ判定（クリック位置に最も近い頂点/線分を見つける）はライブラリの `findNearestVertex` / `findNearestEdge` を呼び、ピクセル→度数の変換はアプリ層が行う。
@@ -121,13 +121,35 @@ const editor = new NetworkPolygonEditor(adapter?: StorageAdapter);
 
 ### Drawing Mode Operations
 
-Call these between `startDrawing()` and drawing end. Drawing ends automatically on `snapToVertex`/`snapToEdge`, or manually via `endDrawing()`.
+Call these between `startDrawing()` and drawing end.
+
+`snapToVertex` / `snapToEdge` は描画の**開始時と終了時で挙動が異なる**。最初の頂点がまだ置かれていない場合は描画開始（描画継続）、既に頂点がある場合は描画終了となる。
+
+#### 描画開始（最初の1点を決める）
+
+3通りの方法で描画の始点を指定できる。いずれも描画は**継続**する。
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `placeVertex(lat, lng)` | `ChangeSet` | Add vertex. First = isolated, subsequent = connected to previous |
-| `snapToVertex(vertexId)` | `ChangeSet` | Connect to existing vertex → ends drawing. Creates polygon if cycle closed |
-| `snapToEdge(edgeId, lat, lng)` | `ChangeSet` | Split edge at point, connect → ends drawing |
+| `placeVertex(lat, lng)` | `ChangeSet` | 自由座標に新規頂点を作成して描画開始 |
+| `snapToVertex(vertexId)` | `ChangeSet` | 既存頂点を始点として描画開始（頂点作成なし） |
+| `snapToEdge(edgeId, lat, lng)` | `ChangeSet` | 既存線分上に頂点を追加（辺分割）して描画開始 |
+
+#### 描画中（中間頂点の追加）
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `placeVertex(lat, lng)` | `ChangeSet` | 自由座標に頂点を追加し、前の頂点と接続 |
+
+#### 描画終了
+
+3通りの方法で描画を終了できる。`snapToVertex` / `snapToEdge` は自動的に描画を終了する。
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `snapToVertex(vertexId)` | `ChangeSet` | 既存頂点に接続して描画終了。閉回路ならポリゴン生成 |
+| `snapToEdge(edgeId, lat, lng)` | `ChangeSet` | 既存線分上に頂点を追加し接続して描画終了 |
+| `endDrawing()` | `ChangeSet` | 描画終了（頂点・線分はそのまま残る。自由端） |
 
 ### Edit Operations
 

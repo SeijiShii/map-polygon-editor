@@ -115,6 +115,91 @@ describe("DrawingMode", () => {
     });
   });
 
+  describe("start drawing from existing vertex", () => {
+    it("should continue drawing after snapping to existing vertex at start", () => {
+      const pre = ops.addVertex(0, 0);
+      const existingId = pre.vertices.added[0]!.id;
+
+      drawing.start();
+      const cs = drawing.snapToExistingVertex(existingId);
+
+      // No network changes, just set start point
+      expect(cs.vertices.added).toHaveLength(0);
+      expect(cs.edges.added).toHaveLength(0);
+      // Drawing should continue, NOT end
+      expect(drawing.isActive()).toBe(true);
+    });
+
+    it("should connect subsequent vertices from snapped start vertex", () => {
+      const pre = ops.addVertex(0, 0);
+      const existingId = pre.vertices.added[0]!.id;
+
+      drawing.start();
+      drawing.snapToExistingVertex(existingId);
+      const cs = drawing.placeVertex(1, 1);
+
+      // Should create edge from existing vertex to new vertex
+      expect(cs.vertices.added).toHaveLength(1);
+      expect(cs.edges.added.length).toBeGreaterThanOrEqual(1);
+      expect(network.getAllEdges()).toHaveLength(1);
+    });
+
+    it("should form triangle: start from existing vertex, draw, snap back", () => {
+      const pre = ops.addVertex(0, 0);
+      const startId = pre.vertices.added[0]!.id;
+
+      drawing.start();
+      drawing.snapToExistingVertex(startId);
+      drawing.placeVertex(1, 0);
+      drawing.placeVertex(0.5, 1);
+      const cs = drawing.snapToExistingVertex(startId);
+
+      expect(drawing.isActive()).toBe(false);
+      expect(cs.polygons.created).toHaveLength(1);
+    });
+
+    it("should not include start vertex in sessionVertices (it is pre-existing)", () => {
+      const pre = ops.addVertex(0, 0);
+      const existingId = pre.vertices.added[0]!.id;
+
+      drawing.start();
+      drawing.snapToExistingVertex(existingId);
+
+      // The pre-existing vertex should not be in session (undo should not remove it)
+      expect(drawing.getSessionVertices()).not.toContain(existingId);
+    });
+  });
+
+  describe("start drawing from existing edge", () => {
+    it("should split edge and continue drawing from split point", () => {
+      const v1 = ops.addVertex(0, 0);
+      const v2 = ops.addConnectedVertex(v1.vertices.added[0]!.id, 0, 2);
+      const edgeId = v2.edges.added[0]!.id;
+
+      drawing.start();
+      const cs = drawing.snapToExistingEdge(edgeId, 0, 1);
+
+      // Edge should be split
+      expect(cs.edges.removed).toContain(edgeId);
+      expect(cs.vertices.added).toHaveLength(1);
+      // Drawing should continue, NOT end
+      expect(drawing.isActive()).toBe(true);
+    });
+
+    it("should connect subsequent vertices from edge split point", () => {
+      const v1 = ops.addVertex(0, 0);
+      const v2 = ops.addConnectedVertex(v1.vertices.added[0]!.id, 0, 2);
+      const edgeId = v2.edges.added[0]!.id;
+
+      drawing.start();
+      drawing.snapToExistingEdge(edgeId, 0, 1);
+      const cs = drawing.placeVertex(1, 1);
+
+      expect(cs.vertices.added).toHaveLength(1);
+      expect(cs.edges.added.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   describe("undoLastVertex", () => {
     it("should remove last placed vertex and edge", () => {
       drawing.start();

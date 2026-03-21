@@ -67,19 +67,18 @@ export class DrawingMode {
       throw new Error("Drawing mode is not active");
     }
 
-    let cs: ChangeSet;
     if (this.currentVertexId === null) {
-      // No current vertex — just set it as current and end
+      // Start drawing from existing vertex — continue drawing
       this.currentVertexId = vertexId;
-      cs = emptyChangeSet();
-    } else {
-      cs = this.ops.snapToVertex(this.currentVertexId, vertexId);
-      if (cs.edges.added.length > 0) {
-        this.sessionEdges.push(cs.edges.added[0]!.id);
-      }
+      return emptyChangeSet();
     }
 
-    // End drawing
+    // End drawing: connect to existing vertex
+    const cs = this.ops.snapToVertex(this.currentVertexId, vertexId);
+    if (cs.edges.added.length > 0) {
+      this.sessionEdges.push(cs.edges.added[0]!.id);
+    }
+
     this.active = false;
     this.currentVertexId = null;
     this.sessionVertices = [];
@@ -87,25 +86,22 @@ export class DrawingMode {
     return cs;
   }
 
-  snapToExistingEdge(
-    edgeId: EdgeID,
-    lat: number,
-    lng: number,
-  ): ChangeSet {
+  snapToExistingEdge(edgeId: EdgeID, lat: number, lng: number): ChangeSet {
     if (!this.active) {
       throw new Error("Drawing mode is not active");
     }
 
-    let cs: ChangeSet;
     if (this.currentVertexId === null) {
-      // Split edge and set split point as current, then end
-      cs = this.ops.splitEdgeAtPoint(edgeId, lat, lng);
-      // The split vertex is the last added
-    } else {
-      cs = this.ops.snapToEdge(this.currentVertexId, edgeId, lat, lng);
+      // Start drawing from edge split point — continue drawing
+      const cs = this.ops.splitEdgeAtPoint(edgeId, lat, lng);
+      const splitVertex = cs.vertices.added[cs.vertices.added.length - 1]!;
+      this.currentVertexId = splitVertex.id;
+      return cs;
     }
 
-    // End drawing
+    // End drawing: connect to edge split point
+    const cs = this.ops.snapToEdge(this.currentVertexId, edgeId, lat, lng);
+
     this.active = false;
     this.currentVertexId = null;
     this.sessionVertices = [];
