@@ -37,7 +37,13 @@
     "geojson",
     "area"
   ],
+  "author": "SeijiShii <seiji.shii@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SeijiShii/map-polygon-editor.git"
+  },
+  "homepage": "https://github.com/SeijiShii/map-polygon-editor#readme",
   "dependencies": {
     "@turf/turf": "^7.3.4"
   }

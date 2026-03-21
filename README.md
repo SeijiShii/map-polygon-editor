@@ -30,6 +30,7 @@
 | [API リファレンス](docs/api.md) | 全メソッド仕様・型定義・Leaflet連携例 |
 | [v3 仕様](docs/experimental-v3.md) | 設計思想・データ概念・設計判断 |
 | [実装計画](docs/v3-implementation-plan.md) | フェーズ別実装計画 |
+| [リリース手順](docs/releasing.md) | npm公開・バージョン管理 |
 
 ## アーキテクチャ
 
@@ -45,6 +46,12 @@
     ┌───────────┼────────────┐
     ↓           ↓            ↓
  Leaflet    Google Maps   その他
+```
+
+## インストール
+
+```bash
+npm install map-polygon-editor
 ```
 
 ## クイックスタート
@@ -71,4 +78,7 @@ const geojson = editor.getAllGeoJSON();
 
 ## ステータス
 
-v3 実装完了。115テスト通過、カバレッジ92.6%。
+v3 実装完了。128テスト通過。
+
+[![npm version](https://img.shields.io/npm/v/map-polygon-editor.svg)](https://www.npmjs.com/package/map-polygon-editor)
+[![license](https://img.shields.io/npm/l/map-polygon-editor.svg)](https://github.com/SeijiShii/map-polygon-editor/blob/main/LICENSE)
