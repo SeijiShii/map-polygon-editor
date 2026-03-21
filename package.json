@@ -21,7 +21,8 @@
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "release": "bash scripts/publish.sh"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
