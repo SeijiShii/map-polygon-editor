@@ -139,6 +139,31 @@ Call these between `startDrawing()` and drawing end. Drawing ends automatically 
 | `splitEdge(edgeId, lat, lng)` | `ChangeSet` | Insert vertex on edge (splits into 2 edges) |
 | `pruneOrphans()` | `ChangeSet` | Remove all vertices and edges not belonging to any polygon |
 
+### Drag Operations
+
+頂点ドラッグ中にポリゴンをリアルタイム追従させつつ、undoは1ステップにまとめるためのAPI。
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `beginDrag(vertexId)` | `void` | ドラッグ開始。元座標を保存 |
+| `dragTo(lat, lng)` | `ChangeSet` | ドラッグ中の移動。座標更新+ポリゴン再構築のみ（undo記録なし、交差解決なし） |
+| `endDrag()` | `ChangeSet` | ドラッグ終了。交差解決+undo記録（元座標→最終座標の1ステップ） |
+| `cancelDrag()` | `void` | ドラッグキャンセル。元座標に復元 |
+
+```ts
+// Usage example
+marker.on("mousedown", () => editor.beginDrag(vertexId));
+map.on("mousemove", (e) => {
+  const cs = editor.dragTo(e.latlng.lat, e.latlng.lng);
+  applyChangeSet(cs, layers, map);  // polygons follow in real-time
+});
+map.on("mouseup", () => {
+  const cs = editor.endDrag();
+  applyChangeSet(cs, layers, map);
+  // undo() will revert the entire drag as one step
+});
+```
+
 ### Undo/Redo
 
 | Method | Returns | Description |
