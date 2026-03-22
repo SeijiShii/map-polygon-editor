@@ -167,6 +167,12 @@ export class NetworkPolygonEditor {
     return cs;
   }
 
+  removePolygon(polygonId: PolygonID): ChangeSet {
+    const cs = this.operations.removePolygon(polygonId);
+    this.undoRedo.push(cs);
+    return cs;
+  }
+
   splitEdge(edgeId: EdgeID, lat: number, lng: number): ChangeSet {
     const cs = this.operations.splitEdgeAtPoint(edgeId, lat, lng);
     this.undoRedo.push(cs);

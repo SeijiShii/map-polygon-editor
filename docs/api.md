@@ -158,6 +158,7 @@ Call these between `startDrawing()` and drawing end.
 | `moveVertex(vertexId, lat, lng)` | `ChangeSet` | Move vertex. Auto-detects new edge crossings |
 | `removeVertex(vertexId)` | `ChangeSet` | Delete vertex + all connected edges |
 | `removeEdge(edgeId)` | `ChangeSet` | Delete edge only (vertices remain) |
+| `removePolygon(polygonId)` | `ChangeSet` | Delete polygon + cleanup unused edges/vertices (see below) |
 | `splitEdge(edgeId, lat, lng)` | `ChangeSet` | Insert vertex on edge (splits into 2 edges) |
 | `pruneOrphans()` | `ChangeSet` | Remove all vertices and edges not belonging to any polygon |
 
@@ -218,6 +219,26 @@ interface StorageAdapter {
   loadAll(): Promise<{ vertices: Vertex[]; edges: Edge[]; polygons: PolygonSnapshot[] }>
   saveAll(data: { vertices: Vertex[]; edges: Edge[]; polygons: PolygonSnapshot[] }): Promise<void>
 }
+```
+
+## removePolygon vs pruneOrphans
+
+両者は異なる責務を持つ。
+
+| | `removePolygon(id)` | `pruneOrphans()` |
+|---|---|---|
+| **目的** | 特定のポリゴンをUX的に「削除」する | ポリゴンに属さない孤立要素を一括清掃する |
+| **対象** | 指定ポリゴンの構成要素のみ | ネットワーク全体の孤立要素 |
+| **エッジ削除** | 他のポリゴンと共有されていないエッジのみ | どのポリゴンにも属さないエッジすべて |
+| **頂点削除** | エッジ削除後にdegree=0になった頂点のみ | どのポリゴンにも属さない頂点すべて |
+| **ダングリング要素** | 残す（削除したポリゴンの関連に絞ったクリーンアップ） | 削除する |
+
+```ts
+// ポリゴン削除: 共有エッジは保護される
+editor.removePolygon(polygonId);
+
+// その後、残った半端な線分も消したい場合は:
+editor.pruneOrphans();
 ```
 
 ## Key Behaviors

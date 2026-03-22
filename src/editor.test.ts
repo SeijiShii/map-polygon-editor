@@ -329,6 +329,57 @@ describe("NetworkPolygonEditor", () => {
     });
   });
 
+  describe("removePolygon", () => {
+    function makeTriangle(ed: NetworkPolygonEditor) {
+      ed.startDrawing();
+      ed.placeVertex(0, 0);
+      ed.placeVertex(1, 0);
+      ed.placeVertex(0.5, 1);
+      const first = ed.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed.snapToVertex(first.id);
+      return ed.getPolygons()[0]!.id;
+    }
+
+    it("should remove an isolated polygon with all edges and vertices", () => {
+      const polyId = makeTriangle(editor);
+      expect(editor.getPolygons()).toHaveLength(1);
+
+      const cs = editor.removePolygon(polyId);
+
+      expect(cs.polygons.removed).toContain(polyId);
+      expect(editor.getPolygons()).toHaveLength(0);
+      expect(editor.getEdges()).toHaveLength(0);
+      expect(editor.getVertices()).toHaveLength(0);
+    });
+
+    it("should support undo after removePolygon", () => {
+      const polyId = makeTriangle(editor);
+
+      editor.removePolygon(polyId);
+      expect(editor.getPolygons()).toHaveLength(0);
+
+      // Undo should restore the polygon
+      editor.undo();
+      expect(editor.getPolygons()).toHaveLength(1);
+      expect(editor.getVertices()).toHaveLength(3);
+      expect(editor.getEdges()).toHaveLength(3);
+    });
+
+    it("should support redo after undo of removePolygon", () => {
+      const polyId = makeTriangle(editor);
+
+      editor.removePolygon(polyId);
+      editor.undo();
+      expect(editor.getPolygons()).toHaveLength(1);
+
+      // Redo should re-remove the polygon
+      editor.redo();
+      expect(editor.getPolygons()).toHaveLength(0);
+      expect(editor.getEdges()).toHaveLength(0);
+      expect(editor.getVertices()).toHaveLength(0);
+    });
+  });
+
   describe("pruneOrphans", () => {
     it("should remove vertices and edges not belonging to any polygon", () => {
       // Draw a triangle (creates polygon)

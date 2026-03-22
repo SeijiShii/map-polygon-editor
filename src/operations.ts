@@ -2,7 +2,14 @@ import type { Network } from "./network";
 import type { PolygonManager } from "./polygon-manager";
 import { enumerateFaces } from "./half-edge";
 import { findIntersections, resolveIntersections } from "./intersection";
-import type { ChangeSet, Vertex, Edge, VertexID, EdgeID } from "./types";
+import type {
+  ChangeSet,
+  Vertex,
+  Edge,
+  VertexID,
+  EdgeID,
+  PolygonID,
+} from "./types";
 import { emptyChangeSet } from "./types";
 
 export class Operations {
@@ -174,6 +181,64 @@ export class Operations {
     const e1 = this.network.addEdge(edge.v1, splitVertex.id);
     const e2 = this.network.addEdge(splitVertex.id, edge.v2);
     cs.edges.added.push(e1, e2);
+
+    this.rebuildPolygons(cs);
+    return cs;
+  }
+
+  removePolygon(polygonId: PolygonID): ChangeSet {
+    const cs = emptyChangeSet();
+    const polygon = this.polygonManager.getPolygon(polygonId);
+    if (!polygon) return cs;
+
+    // Collect all edge IDs of the target polygon (outer + holes)
+    const targetEdgeIds = new Set<EdgeID>(polygon.edgeIds);
+    for (const hole of polygon.holes) {
+      for (const eid of hole) targetEdgeIds.add(eid);
+    }
+
+    // Collect edge IDs protected by other polygons
+    const protectedEdgeIds = new Set<EdgeID>();
+    for (const other of this.polygonManager.getAllPolygons()) {
+      if (other.id === polygonId) continue;
+      for (const eid of other.edgeIds) protectedEdgeIds.add(eid);
+      for (const hole of other.holes) {
+        for (const eid of hole) protectedEdgeIds.add(eid);
+      }
+    }
+
+    // Edges to delete = target edges minus protected
+    const edgesToDelete: EdgeID[] = [];
+    for (const eid of targetEdgeIds) {
+      if (!protectedEdgeIds.has(eid)) edgesToDelete.push(eid);
+    }
+
+    // Collect candidate vertices before deleting edges
+    const candidateVertexIds = new Set<VertexID>();
+    for (const eid of edgesToDelete) {
+      const edge = this.network.getEdge(eid);
+      if (edge) {
+        candidateVertexIds.add(edge.v1);
+        candidateVertexIds.add(edge.v2);
+      }
+    }
+
+    // Delete edges
+    for (const eid of edgesToDelete) {
+      this.network.removeEdge(eid);
+      cs.edges.removed.push(eid);
+    }
+
+    // Delete vertices that became isolated (degree 0) in the network
+    for (const vid of candidateVertexIds) {
+      if (
+        this.network.getVertex(vid) &&
+        this.network.getEdgesOfVertex(vid).length === 0
+      ) {
+        this.network.removeVertex(vid);
+        cs.vertices.removed.push(vid);
+      }
+    }
 
     this.rebuildPolygons(cs);
     return cs;

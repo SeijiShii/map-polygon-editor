@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { Network } from "./network";
 import { PolygonManager } from "./polygon-manager";
 import { Operations } from "./operations";
-import type { VertexID } from "./types";
+import type { VertexID, PolygonID } from "./types";
+import { createPolygonID } from "./types";
 
 describe("Operations", () => {
   let network: Network;
@@ -197,6 +198,112 @@ describe("Operations", () => {
       expect(cs.edges.removed).toContain(edgeId);
       expect(cs.edges.added).toHaveLength(2);
       expect(network.getAllEdges()).toHaveLength(2);
+    });
+  });
+
+  describe("removePolygon", () => {
+    /** Helper: build a triangle and return vertex IDs + polygon ID */
+    function makeTriangle(o: Operations, n: Network, pm: PolygonManager) {
+      const cs0 = o.addVertex(0, 0);
+      const v0 = cs0.vertices.added[0]!.id;
+      const cs1 = o.addConnectedVertex(v0, 1, 0);
+      const v1 = cs1.vertices.added[0]!.id;
+      const cs2 = o.addConnectedVertex(v1, 0.5, 1);
+      const v2 = cs2.vertices.added[0]!.id;
+      o.snapToVertex(v2, v0);
+      const polyId = pm.getAllPolygons()[0]!.id;
+      return { v0, v1, v2, polyId };
+    }
+
+    it("should remove an isolated triangle completely (edges + vertices)", () => {
+      const { polyId } = makeTriangle(ops, network, polygonManager);
+      expect(polygonManager.getAllPolygons()).toHaveLength(1);
+
+      const cs = ops.removePolygon(polyId);
+
+      // All 3 edges removed
+      expect(cs.edges.removed).toHaveLength(3);
+      // All 3 vertices removed
+      expect(cs.vertices.removed).toHaveLength(3);
+      // Polygon removed
+      expect(cs.polygons.removed).toContain(polyId);
+      // Network is empty
+      expect(network.getAllEdges()).toHaveLength(0);
+      expect(network.getAllVertices()).toHaveLength(0);
+      expect(polygonManager.getAllPolygons()).toHaveLength(0);
+    });
+
+    it("should preserve shared edges and vertices when adjacent polygon exists", () => {
+      // Build two adjacent triangles sharing one edge:
+      //   v0 --- v1
+      //    \  A  / \
+      //     \  /  B \
+      //      v2 --- v3
+      const cs0 = ops.addVertex(0, 1);
+      const v0 = cs0.vertices.added[0]!.id;
+      const cs1 = ops.addConnectedVertex(v0, 1, 1);
+      const v1 = cs1.vertices.added[0]!.id;
+      const cs2 = ops.addConnectedVertex(v1, 0.5, 0);
+      const v2 = cs2.vertices.added[0]!.id;
+      // Close triangle A: v2 -> v0
+      ops.snapToVertex(v2, v0);
+      expect(polygonManager.getAllPolygons()).toHaveLength(1);
+      const polyA = polygonManager.getAllPolygons()[0]!.id;
+
+      // Build triangle B: v1 -> v3 -> v2
+      const cs3 = ops.addConnectedVertex(v1, 1.5, 0);
+      const v3 = cs3.vertices.added[0]!.id;
+      ops.snapToVertex(v3, v2);
+      expect(polygonManager.getAllPolygons()).toHaveLength(2);
+      const polyB = polygonManager
+        .getAllPolygons()
+        .find((p) => p.id !== polyA)!.id;
+
+      // Remove triangle B
+      const cs = ops.removePolygon(polyB);
+
+      // Shared edge (v1-v2) should be preserved
+      // Only non-shared edges of B removed (v1-v3, v3-v2)
+      expect(cs.edges.removed).toHaveLength(2);
+      // Only v3 should be removed (v1, v2 are shared)
+      expect(cs.vertices.removed).toHaveLength(1);
+      expect(cs.vertices.removed).toContain(v3);
+      // Triangle A still exists
+      expect(polygonManager.getAllPolygons()).toHaveLength(1);
+      expect(polygonManager.getAllPolygons()[0]!.id).toBe(polyA);
+      // v0, v1, v2 still in network
+      expect(network.getVertex(v0)).not.toBeNull();
+      expect(network.getVertex(v1)).not.toBeNull();
+      expect(network.getVertex(v2)).not.toBeNull();
+    });
+
+    it("should return empty ChangeSet for non-existent polygon ID", () => {
+      const fakeId = createPolygonID("nonexistent");
+      const cs = ops.removePolygon(fakeId);
+
+      expect(cs.edges.removed).toHaveLength(0);
+      expect(cs.vertices.removed).toHaveLength(0);
+      expect(cs.polygons.removed).toHaveLength(0);
+    });
+
+    it("should handle dangling edges attached to polygon vertex", () => {
+      // Triangle + one dangling edge from v0
+      const { v0, polyId } = makeTriangle(ops, network, polygonManager);
+
+      // Add a dangling edge from v0
+      const csDangle = ops.addConnectedVertex(v0, -1, -1);
+      const vDangle = csDangle.vertices.added[0]!.id;
+
+      // Remove the triangle
+      const cs = ops.removePolygon(polyId);
+
+      // Polygon removed
+      expect(cs.polygons.removed).toContain(polyId);
+      // v0 still has a dangling edge, so it should NOT be removed
+      expect(network.getVertex(v0)).not.toBeNull();
+      expect(network.getVertex(vDangle)).not.toBeNull();
+      // The dangling edge still exists
+      expect(network.getEdgesOfVertex(v0)).toHaveLength(1);
     });
   });
 });
