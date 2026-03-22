@@ -144,6 +144,20 @@ export class UndoRedoManager {
       }
     }
 
+    // Reverse status changes
+    for (const sc of cs.polygons.statusChanged) {
+      const snap = this.polygonManager.getPolygon(sc.id);
+      if (snap) {
+        this.polygonManager.setStatus(sc.id, sc.field, sc.before);
+        result.polygons.statusChanged.push({
+          id: sc.id,
+          field: sc.field,
+          before: sc.after,
+          after: sc.before,
+        });
+      }
+    }
+
     // Rebuild polygons
     this.rebuildPolygons(result);
     return result;
@@ -197,6 +211,15 @@ export class UndoRedoManager {
         const removedEdges = this.network.removeVertex(vertexId);
         result.vertices.removed.push(vertexId);
         result.edges.removed.push(...removedEdges);
+      }
+    }
+
+    // Re-apply status changes
+    for (const sc of cs.polygons.statusChanged) {
+      const snap = this.polygonManager.getPolygon(sc.id);
+      if (snap) {
+        this.polygonManager.setStatus(sc.id, sc.field, sc.after);
+        result.polygons.statusChanged.push(sc);
       }
     }
 

@@ -5,6 +5,7 @@ import type {
   Face,
   PolygonSnapshot,
   PolygonID,
+  PolygonStatusField,
   EdgeID,
   VertexID,
 } from "./types";
@@ -30,6 +31,19 @@ export class PolygonManager {
 
   getPolygon(id: PolygonID): PolygonSnapshot | null {
     return this.polygons.get(id) ?? null;
+  }
+
+  setStatus(
+    id: PolygonID,
+    field: PolygonStatusField,
+    value: boolean,
+  ): { before: boolean; after: boolean } {
+    const snap = this.polygons.get(id);
+    if (!snap) throw new Error(`Polygon ${id} does not exist`);
+    const defaultValue = field === "active" ? true : false;
+    const before = snap[field] ?? defaultValue;
+    snap[field] = value;
+    return { before, after: value };
   }
 
   /**
@@ -179,12 +193,22 @@ export class PolygonManager {
       );
 
       if (overlapping.length === 0) {
-        // Brand new polygon
+        // Brand new polygon — but check if it was split from a used prev polygon
+        const splitParent = prevEntries.find(
+          (prev) =>
+            usedPrevIds.has(prev.id) && setsOverlap(newEdgeSet, prev.edgeSet),
+        );
         const id = createPolygonID(generateId());
         const snap: PolygonSnapshot = {
           id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          ...(splitParent?.snap.locked != null && {
+            locked: splitParent.snap.locked,
+          }),
+          ...(splitParent?.snap.active != null && {
+            active: splitParent.snap.active,
+          }),
         };
         newPolygons.set(id, snap);
         diff.created.push(snap);
@@ -196,6 +220,8 @@ export class PolygonManager {
           id: prev.id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          ...(prev.snap.locked != null && { locked: prev.snap.locked }),
+          ...(prev.snap.active != null && { active: prev.snap.active }),
         };
         newPolygons.set(prev.id, snap);
 
@@ -236,6 +262,12 @@ export class PolygonManager {
           id: bestMatch.id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          ...(bestMatch.snap.locked != null && {
+            locked: bestMatch.snap.locked,
+          }),
+          ...(bestMatch.snap.active != null && {
+            active: bestMatch.snap.active,
+          }),
         };
         newPolygons.set(bestMatch.id, snap);
         diff.modified.push({
@@ -305,7 +337,11 @@ export class PolygonManager {
       if (geometry) {
         features.push({
           type: "Feature",
-          properties: { id },
+          properties: {
+            id,
+            locked: snap.locked ?? false,
+            active: snap.active ?? true,
+          },
           geometry,
         });
       }

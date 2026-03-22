@@ -15,7 +15,7 @@ import type {
   EditorMode,
   StorageAdapter,
 } from "./types";
-import { emptyChangeSet } from "./types";
+import { emptyChangeSet, LockedPolygonError } from "./types";
 import type { FeatureCollection, Polygon } from "geojson";
 
 export class NetworkPolygonEditor {
@@ -53,6 +53,25 @@ export class NetworkPolygonEditor {
     // Rebuild polygon snapshots from network
     const faces = enumerateFaces(this.network);
     this.polygonManager.updateFromFaces(faces, this.network);
+
+    // Restore status from loaded polygon data
+    if (data.polygons) {
+      const loadedByEdgeKey = new Map<string, PolygonSnapshot>();
+      for (const p of data.polygons) {
+        const key = [...p.edgeIds].sort().join(",");
+        loadedByEdgeKey.set(key, p);
+      }
+      for (const poly of this.polygonManager.getAllPolygons()) {
+        const key = [...poly.edgeIds].sort().join(",");
+        const loaded = loadedByEdgeKey.get(key);
+        if (loaded) {
+          if (loaded.locked != null)
+            this.polygonManager.setStatus(poly.id, "locked", loaded.locked);
+          if (loaded.active != null)
+            this.polygonManager.setStatus(poly.id, "active", loaded.active);
+        }
+      }
+    }
   }
 
   async save(): Promise<void> {
@@ -115,6 +134,17 @@ export class NetworkPolygonEditor {
   beginDrag(vertexId: VertexID): void {
     const v = this.network.getVertex(vertexId);
     if (!v) throw new Error(`Vertex ${vertexId} does not exist`);
+    // Check lock via operations layer (same guard as moveVertex)
+    for (const poly of this.polygonManager.getAllPolygons()) {
+      if (!(poly.locked ?? false)) continue;
+      for (const eid of poly.edgeIds) {
+        const edge = this.network.getEdge(eid);
+        if (edge && (edge.v1 === vertexId || edge.v2 === vertexId))
+          throw new LockedPolygonError(
+            `Vertex ${vertexId} belongs to a locked polygon`,
+          );
+      }
+    }
     this.dragOrigin = { id: vertexId, lat: v.lat, lng: v.lng };
   }
 
@@ -177,6 +207,44 @@ export class NetworkPolygonEditor {
     const cs = this.operations.splitEdgeAtPoint(edgeId, lat, lng);
     this.undoRedo.push(cs);
     return cs;
+  }
+
+  // --- Polygon Status ---
+
+  setPolygonLocked(polygonId: PolygonID, locked: boolean): ChangeSet {
+    const cs = emptyChangeSet();
+    const result = this.polygonManager.setStatus(polygonId, "locked", locked);
+    cs.polygons.statusChanged.push({
+      id: polygonId,
+      field: "locked",
+      before: result.before,
+      after: result.after,
+    });
+    this.undoRedo.push(cs);
+    return cs;
+  }
+
+  setPolygonActive(polygonId: PolygonID, active: boolean): ChangeSet {
+    const cs = emptyChangeSet();
+    const result = this.polygonManager.setStatus(polygonId, "active", active);
+    cs.polygons.statusChanged.push({
+      id: polygonId,
+      field: "active",
+      before: result.before,
+      after: result.after,
+    });
+    this.undoRedo.push(cs);
+    return cs;
+  }
+
+  isPolygonLocked(polygonId: PolygonID): boolean {
+    const snap = this.polygonManager.getPolygon(polygonId);
+    return snap?.locked ?? false;
+  }
+
+  isPolygonActive(polygonId: PolygonID): boolean {
+    const snap = this.polygonManager.getPolygon(polygonId);
+    return snap?.active ?? true;
   }
 
   // --- Undo/Redo ---

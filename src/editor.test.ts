@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { NetworkPolygonEditor } from "./editor";
+import { LockedPolygonError } from "./types";
 
 describe("NetworkPolygonEditor", () => {
   let editor: NetworkPolygonEditor;
@@ -435,6 +436,122 @@ describe("NetworkPolygonEditor", () => {
       const cs = editor.pruneOrphans();
       expect(editor.getVertices()).toHaveLength(0);
       expect(cs.vertices.removed).toHaveLength(1);
+    });
+  });
+
+  describe("polygon status", () => {
+    function makeTriangle(ed: NetworkPolygonEditor) {
+      ed.startDrawing();
+      ed.placeVertex(0, 0);
+      ed.placeVertex(1, 0);
+      ed.placeVertex(0.5, 1);
+      const first = ed.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed.snapToVertex(first.id);
+      return ed.getPolygons()[0]!.id;
+    }
+
+    it("should set and query locked status", () => {
+      const polyId = makeTriangle(editor);
+      expect(editor.isPolygonLocked(polyId)).toBe(false);
+
+      const cs = editor.setPolygonLocked(polyId, true);
+      expect(cs.polygons.statusChanged).toHaveLength(1);
+      expect(cs.polygons.statusChanged[0]!.field).toBe("locked");
+      expect(cs.polygons.statusChanged[0]!.before).toBe(false);
+      expect(cs.polygons.statusChanged[0]!.after).toBe(true);
+      expect(editor.isPolygonLocked(polyId)).toBe(true);
+    });
+
+    it("should set and query active status", () => {
+      const polyId = makeTriangle(editor);
+      expect(editor.isPolygonActive(polyId)).toBe(true);
+
+      const cs = editor.setPolygonActive(polyId, false);
+      expect(cs.polygons.statusChanged).toHaveLength(1);
+      expect(cs.polygons.statusChanged[0]!.field).toBe("active");
+      expect(editor.isPolygonActive(polyId)).toBe(false);
+    });
+
+    it("should undo setPolygonLocked", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonLocked(polyId, true);
+      expect(editor.isPolygonLocked(polyId)).toBe(true);
+
+      editor.undo();
+      expect(editor.isPolygonLocked(polyId)).toBe(false);
+    });
+
+    it("should redo setPolygonLocked", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonLocked(polyId, true);
+      editor.undo();
+      editor.redo();
+      expect(editor.isPolygonLocked(polyId)).toBe(true);
+    });
+
+    it("should undo setPolygonActive", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonActive(polyId, false);
+      expect(editor.isPolygonActive(polyId)).toBe(false);
+
+      editor.undo();
+      expect(editor.isPolygonActive(polyId)).toBe(true);
+    });
+
+    it("should allow setActive on locked polygon", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonLocked(polyId, true);
+      // Active change should work even when locked
+      expect(() => editor.setPolygonActive(polyId, false)).not.toThrow();
+      expect(editor.isPolygonActive(polyId)).toBe(false);
+    });
+
+    it("should block beginDrag on locked polygon vertex", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonLocked(polyId, true);
+      const vId = editor.getVertices()[0]!.id;
+      expect(() => editor.beginDrag(vId)).toThrow(LockedPolygonError);
+    });
+
+    it("should preserve status through save/load cycle", async () => {
+      let savedData: any = null;
+      const adapter = {
+        loadAll: async () => savedData,
+        saveAll: async (data: any) => {
+          savedData = data;
+        },
+      };
+
+      const ed1 = new NetworkPolygonEditor(adapter);
+      ed1.startDrawing();
+      ed1.placeVertex(0, 0);
+      ed1.placeVertex(1, 0);
+      ed1.placeVertex(0.5, 1);
+      const first = ed1.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed1.snapToVertex(first.id);
+      const polyId = ed1.getPolygons()[0]!.id;
+      ed1.setPolygonLocked(polyId, true);
+      ed1.setPolygonActive(polyId, false);
+      await ed1.save();
+
+      // Load into new editor
+      const ed2 = new NetworkPolygonEditor(adapter);
+      await ed2.init();
+      expect(ed2.getPolygons()).toHaveLength(1);
+      const loadedPoly = ed2.getPolygons()[0]!;
+      expect(loadedPoly.locked).toBe(true);
+      expect(loadedPoly.active).toBe(false);
+    });
+
+    it("should include locked/active in GeoJSON properties", () => {
+      const polyId = makeTriangle(editor);
+      editor.setPolygonLocked(polyId, true);
+      editor.setPolygonActive(polyId, false);
+
+      const fc = editor.getAllGeoJSON();
+      const props = fc.features[0]!.properties!;
+      expect(props.locked).toBe(true);
+      expect(props.active).toBe(false);
     });
   });
 });

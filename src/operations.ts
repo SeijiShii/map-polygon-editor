@@ -10,13 +10,42 @@ import type {
   EdgeID,
   PolygonID,
 } from "./types";
-import { emptyChangeSet } from "./types";
+import { emptyChangeSet, LockedPolygonError } from "./types";
 
 export class Operations {
   constructor(
     private network: Network,
     private polygonManager: PolygonManager,
   ) {}
+
+  private isVertexLocked(vertexId: VertexID): boolean {
+    for (const poly of this.polygonManager.getAllPolygons()) {
+      if (!(poly.locked ?? false)) continue;
+      for (const eid of poly.edgeIds) {
+        const edge = this.network.getEdge(eid);
+        if (edge && (edge.v1 === vertexId || edge.v2 === vertexId)) return true;
+      }
+      for (const hole of poly.holes) {
+        for (const eid of hole) {
+          const edge = this.network.getEdge(eid);
+          if (edge && (edge.v1 === vertexId || edge.v2 === vertexId))
+            return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private isEdgeLocked(edgeId: EdgeID): boolean {
+    for (const poly of this.polygonManager.getAllPolygons()) {
+      if (!(poly.locked ?? false)) continue;
+      if (poly.edgeIds.includes(edgeId)) return true;
+      for (const hole of poly.holes) {
+        if (hole.includes(edgeId)) return true;
+      }
+    }
+    return false;
+  }
 
   addVertex(lat: number, lng: number): ChangeSet {
     const vertex = this.network.addVertex(lat, lng);
@@ -87,6 +116,10 @@ export class Operations {
    * Used for live drag preview — caller is responsible for undo.
    */
   moveVertexLight(vertexId: VertexID, lat: number, lng: number): ChangeSet {
+    if (this.isVertexLocked(vertexId))
+      throw new LockedPolygonError(
+        `Vertex ${vertexId} belongs to a locked polygon`,
+      );
     const cs = emptyChangeSet();
     const oldPos = this.network.moveVertex(vertexId, lat, lng);
     cs.vertices.moved.push({
@@ -99,6 +132,10 @@ export class Operations {
   }
 
   moveVertex(vertexId: VertexID, lat: number, lng: number): ChangeSet {
+    if (this.isVertexLocked(vertexId))
+      throw new LockedPolygonError(
+        `Vertex ${vertexId} belongs to a locked polygon`,
+      );
     const cs = emptyChangeSet();
     const oldPos = this.network.moveVertex(vertexId, lat, lng);
     cs.vertices.moved.push({
@@ -150,6 +187,10 @@ export class Operations {
   }
 
   removeVertex(vertexId: VertexID): ChangeSet {
+    if (this.isVertexLocked(vertexId))
+      throw new LockedPolygonError(
+        `Vertex ${vertexId} belongs to a locked polygon`,
+      );
     const cs = emptyChangeSet();
     const removedEdgeIds = this.network.removeVertex(vertexId);
     cs.vertices.removed.push(vertexId);
@@ -160,6 +201,10 @@ export class Operations {
   }
 
   removeEdge(edgeId: EdgeID): ChangeSet {
+    if (this.isEdgeLocked(edgeId))
+      throw new LockedPolygonError(
+        `Edge ${edgeId} belongs to a locked polygon`,
+      );
     const cs = emptyChangeSet();
     this.network.removeEdge(edgeId);
     cs.edges.removed.push(edgeId);
@@ -169,6 +214,10 @@ export class Operations {
   }
 
   splitEdgeAtPoint(edgeId: EdgeID, lat: number, lng: number): ChangeSet {
+    if (this.isEdgeLocked(edgeId))
+      throw new LockedPolygonError(
+        `Edge ${edgeId} belongs to a locked polygon`,
+      );
     const cs = emptyChangeSet();
     const edge = this.network.getEdge(edgeId)!;
 
@@ -190,6 +239,8 @@ export class Operations {
     const cs = emptyChangeSet();
     const polygon = this.polygonManager.getPolygon(polygonId);
     if (!polygon) return cs;
+    if (polygon.locked ?? false)
+      throw new LockedPolygonError(`Polygon ${polygonId} is locked`);
 
     // Collect all edge IDs of the target polygon (outer + holes)
     const targetEdgeIds = new Set<EdgeID>(polygon.edgeIds);

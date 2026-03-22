@@ -7,6 +7,8 @@ export type {
   VertexID,
   EdgeID,
   PolygonID,
+  PolygonStatusField,
+  PolygonStatusChange,
   EditorMode,
   StorageAdapter,
   Face,
@@ -16,4 +18,5 @@ export {
   createEdgeID,
   createPolygonID,
   emptyChangeSet,
+  LockedPolygonError,
 } from "./types";

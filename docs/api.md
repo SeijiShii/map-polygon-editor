@@ -71,6 +71,8 @@ interface PolygonSnapshot {
   id: PolygonID
   edgeIds: EdgeID[]    // outer ring (ordered cycle)
   holes: EdgeID[][]    // inner rings
+  locked?: boolean     // default false — prevents shape editing
+  active?: boolean     // default true — false marks as inactive (e.g. lake)
 }
 ```
 
@@ -90,6 +92,7 @@ interface ChangeSet {
     created: PolygonSnapshot[]
     modified: Array<{ id: PolygonID; before: PolygonSnapshot; after: PolygonSnapshot }>
     removed: PolygonID[]
+    statusChanged: Array<{ id: PolygonID; field: "locked" | "active"; before: boolean; after: boolean }>
   }
 }
 ```
@@ -161,6 +164,52 @@ Call these between `startDrawing()` and drawing end.
 | `removePolygon(polygonId)` | `ChangeSet` | Delete polygon + cleanup unused edges/vertices (see below) |
 | `splitEdge(edgeId, lat, lng)` | `ChangeSet` | Insert vertex on edge (splits into 2 edges) |
 | `pruneOrphans()` | `ChangeSet` | Remove all vertices and edges not belonging to any polygon |
+
+### Polygon Status
+
+ポリゴンには `locked` と `active` の2つの独立したステータスがある。
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `setPolygonLocked(polygonId, locked)` | `ChangeSet` | ロック状態を設定。ロック中はそのポリゴンの頂点移動・削除、辺削除・分割、ポリゴン削除が禁止される |
+| `setPolygonActive(polygonId, active)` | `ChangeSet` | 活性状態を設定。不活性ポリゴンはメタデータ紐付け対象外として扱える |
+| `isPolygonLocked(polygonId)` | `boolean` | ロック状態を取得 |
+| `isPolygonActive(polygonId)` | `boolean` | 活性状態を取得 |
+
+#### ロックの挙動
+
+- **ブロックされる操作**: `moveVertex`, `removeVertex`, `removeEdge`, `splitEdge`, `removePolygon`, `beginDrag`
+- **許可される操作**: `snapToVertex`, `snapToEdge`, `addConnectedVertex` — 描画モードのスナップは許可（周辺ポリゴンの編集のため）
+- **共有頂点**: ロック済みポリゴンに**1つでも**属する頂点は移動・削除がブロックされる
+- **intersection resolution**: 描画による交差分割はトポロジー表現の細分化でありブロックしない
+- **ステータス引き継ぎ**: ポリゴンの分割・マージ時にステータスは自動引き継ぎされる
+- **undo/redo対応**: ステータス変更は `ChangeSet.polygons.statusChanged` に記録される
+- **エラー型**: ロック違反時は `LockedPolygonError` がスローされる
+
+```ts
+import { LockedPolygonError } from "map-polygon-editor";
+
+try {
+  editor.moveVertex(vertexId, lat, lng);
+} catch (e) {
+  if (e instanceof LockedPolygonError) {
+    // UI: "このポリゴンはロックされています"
+  }
+}
+```
+
+#### 活性不活性の用途
+
+地区をポリゴンに切り分けていくと、湖や公園など地区メタデータとの紐付けが不要な領域がポリゴンとして生成されることがある。不活性にすることでフィルタリングできる。
+
+```ts
+// 湖のポリゴンを不活性にする
+editor.setPolygonActive(lakePolygonId, false);
+
+// GeoJSON エクスポートの properties に active: false が含まれる
+const fc = editor.getAllGeoJSON();
+const activePolygons = fc.features.filter(f => f.properties?.active !== false);
+```
 
 ### Drag Operations
 

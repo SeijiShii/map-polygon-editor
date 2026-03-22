@@ -31,6 +31,17 @@ export interface PolygonSnapshot {
   readonly id: PolygonID;
   edgeIds: EdgeID[]; // ordered cycle (outer ring)
   holes: EdgeID[][]; // ordered cycles (inner rings)
+  locked?: boolean; // default false — prevents shape editing
+  active?: boolean; // default true — false marks as inactive (e.g. lake)
+}
+
+export type PolygonStatusField = "locked" | "active";
+
+export interface PolygonStatusChange {
+  id: PolygonID;
+  field: PolygonStatusField;
+  before: boolean;
+  after: boolean;
 }
 
 // ChangeSet returned by every operation
@@ -56,7 +67,15 @@ export interface ChangeSet {
       after: PolygonSnapshot;
     }>;
     removed: PolygonID[];
+    statusChanged: PolygonStatusChange[];
   };
+}
+
+export class LockedPolygonError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LockedPolygonError";
+  }
 }
 
 export type EditorMode = "idle" | "drawing" | "editing";
@@ -87,6 +106,6 @@ export function emptyChangeSet(): ChangeSet {
   return {
     vertices: { added: [], removed: [], moved: [] },
     edges: { added: [], removed: [] },
-    polygons: { created: [], modified: [], removed: [] },
+    polygons: { created: [], modified: [], removed: [], statusChanged: [] },
   };
 }

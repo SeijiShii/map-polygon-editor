@@ -357,6 +357,33 @@ describe("PolygonManager", () => {
       }
     });
 
+    it("should include locked and active in FeatureCollection properties", () => {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      const poly = manager.getAllPolygons()[0]!;
+
+      // Set locked and inactive
+      manager.setStatus(poly.id, "locked", true);
+      manager.setStatus(poly.id, "active", false);
+
+      const fc = manager.toFeatureCollection(network);
+      const props = fc.features[0]!.properties!;
+      expect(props.locked).toBe(true);
+      expect(props.active).toBe(false);
+    });
+
     it("should export FeatureCollection", () => {
       // Two separate triangles
       const { network } = buildNetwork(
@@ -383,6 +410,102 @@ describe("PolygonManager", () => {
       const fc = manager.toFeatureCollection(network);
       expect(fc.type).toBe("FeatureCollection");
       expect(fc.features).toHaveLength(2);
+    });
+  });
+
+  describe("polygon status", () => {
+    function makeTrianglePolygon(m: PolygonManager) {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const faces = enumerateFaces(network);
+      m.updateFromFaces(faces, network);
+      return { network, polyId: m.getAllPolygons()[0]!.id };
+    }
+
+    it("should default to locked=false, active=true", () => {
+      const { polyId } = makeTrianglePolygon(manager);
+      const snap = manager.getPolygon(polyId)!;
+      expect(snap.locked ?? false).toBe(false);
+      expect(snap.active ?? true).toBe(true);
+    });
+
+    it("should set and get locked status", () => {
+      const { polyId } = makeTrianglePolygon(manager);
+      const result = manager.setStatus(polyId, "locked", true);
+      expect(result.before).toBe(false);
+      expect(result.after).toBe(true);
+      expect(manager.getPolygon(polyId)!.locked).toBe(true);
+    });
+
+    it("should set and get active status", () => {
+      const { polyId } = makeTrianglePolygon(manager);
+      const result = manager.setStatus(polyId, "active", false);
+      expect(result.before).toBe(true);
+      expect(result.after).toBe(false);
+      expect(manager.getPolygon(polyId)!.active).toBe(false);
+    });
+
+    it("should preserve status through face rebuild (identity match)", () => {
+      const { network, polyId } = makeTrianglePolygon(manager);
+      manager.setStatus(polyId, "locked", true);
+      manager.setStatus(polyId, "active", false);
+
+      // Rebuild with same faces — status should persist
+      const faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+
+      const snap = manager.getPolygon(polyId)!;
+      expect(snap.locked).toBe(true);
+      expect(snap.active).toBe(false);
+    });
+
+    it("should inherit status on polygon split", () => {
+      // Square with locked+inactive status, then split by diagonal
+      const { network, vertices } = buildNetwork(
+        [
+          [0, 0],
+          [2, 0],
+          [2, 1],
+          [0, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 3],
+          [3, 0],
+        ],
+      );
+      let faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      const origId = manager.getAllPolygons()[0]!.id;
+      manager.setStatus(origId, "locked", true);
+      manager.setStatus(origId, "active", false);
+
+      // Split
+      network.addEdge(vertices[0]!.id, vertices[2]!.id);
+      faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+
+      // Both resulting polygons should inherit status
+      for (const poly of manager.getAllPolygons()) {
+        expect(poly.locked).toBe(true);
+        expect(poly.active).toBe(false);
+      }
+    });
+
+    it("should throw on setStatus for non-existent polygon", () => {
+      const fakeId = createPolygonID("nonexistent");
+      expect(() => manager.setStatus(fakeId, "locked", true)).toThrow();
     });
   });
 });

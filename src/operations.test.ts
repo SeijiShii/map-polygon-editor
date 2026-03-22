@@ -3,7 +3,7 @@ import { Network } from "./network";
 import { PolygonManager } from "./polygon-manager";
 import { Operations } from "./operations";
 import type { VertexID, PolygonID } from "./types";
-import { createPolygonID } from "./types";
+import { createPolygonID, LockedPolygonError } from "./types";
 
 describe("Operations", () => {
   let network: Network;
@@ -304,6 +304,91 @@ describe("Operations", () => {
       expect(network.getVertex(vDangle)).not.toBeNull();
       // The dangling edge still exists
       expect(network.getEdgesOfVertex(v0)).toHaveLength(1);
+    });
+  });
+
+  describe("lock guard", () => {
+    /** Helper: build a triangle, lock it, return IDs */
+    function makeLockedTriangle(o: Operations, n: Network, pm: PolygonManager) {
+      const cs0 = o.addVertex(0, 0);
+      const v0 = cs0.vertices.added[0]!.id;
+      const cs1 = o.addConnectedVertex(v0, 1, 0);
+      const v1 = cs1.vertices.added[0]!.id;
+      const cs2 = o.addConnectedVertex(v1, 0.5, 1);
+      const v2 = cs2.vertices.added[0]!.id;
+      o.snapToVertex(v2, v0);
+      const poly = pm.getAllPolygons()[0]!;
+      pm.setStatus(poly.id, "locked", true);
+      const edgeIds = poly.edgeIds;
+      return { v0, v1, v2, polyId: poly.id, edgeIds };
+    }
+
+    it("should throw LockedPolygonError on moveVertex of locked polygon vertex", () => {
+      const { v0 } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.moveVertex(v0, 5, 5)).toThrow(LockedPolygonError);
+    });
+
+    it("should throw LockedPolygonError on moveVertexLight of locked polygon vertex", () => {
+      const { v0 } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.moveVertexLight(v0, 5, 5)).toThrow(LockedPolygonError);
+    });
+
+    it("should throw LockedPolygonError on removeVertex of locked polygon vertex", () => {
+      const { v0 } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.removeVertex(v0)).toThrow(LockedPolygonError);
+    });
+
+    it("should throw LockedPolygonError on removeEdge of locked polygon edge", () => {
+      const { edgeIds } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.removeEdge(edgeIds[0]!)).toThrow(LockedPolygonError);
+    });
+
+    it("should throw LockedPolygonError on splitEdgeAtPoint of locked polygon edge", () => {
+      const { edgeIds } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.splitEdgeAtPoint(edgeIds[0]!, 0.5, 0)).toThrow(
+        LockedPolygonError,
+      );
+    });
+
+    it("should throw LockedPolygonError on removePolygon of locked polygon", () => {
+      const { polyId } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.removePolygon(polyId)).toThrow(LockedPolygonError);
+    });
+
+    it("should allow snapToVertex on locked polygon vertex (drawing mode)", () => {
+      const { v0 } = makeLockedTriangle(ops, network, polygonManager);
+      // Add an external vertex and snap to the locked polygon's vertex
+      const csExt = ops.addVertex(2, 2);
+      const vExt = csExt.vertices.added[0]!.id;
+      expect(() => ops.snapToVertex(vExt, v0)).not.toThrow();
+    });
+
+    it("should allow addConnectedVertex from locked polygon vertex", () => {
+      const { v0 } = makeLockedTriangle(ops, network, polygonManager);
+      expect(() => ops.addConnectedVertex(v0, 2, 2)).not.toThrow();
+    });
+
+    it("should block moveVertex on shared vertex if any polygon is locked", () => {
+      // Two adjacent triangles sharing v1-v2 edge, lock only one
+      const cs0 = ops.addVertex(0, 1);
+      const v0 = cs0.vertices.added[0]!.id;
+      const cs1 = ops.addConnectedVertex(v0, 1, 1);
+      const v1 = cs1.vertices.added[0]!.id;
+      const cs2 = ops.addConnectedVertex(v1, 0.5, 0);
+      const v2 = cs2.vertices.added[0]!.id;
+      ops.snapToVertex(v2, v0);
+      const polyA = polygonManager.getAllPolygons()[0]!;
+
+      const cs3 = ops.addConnectedVertex(v1, 1.5, 0);
+      const v3 = cs3.vertices.added[0]!.id;
+      ops.snapToVertex(v3, v2);
+
+      // Lock only polyA
+      polygonManager.setStatus(polyA.id, "locked", true);
+
+      // v1 is shared between locked polyA and unlocked polyB
+      // Should still be blocked because v1 belongs to a locked polygon
+      expect(() => ops.moveVertex(v1, 5, 5)).toThrow(LockedPolygonError);
     });
   });
 });
