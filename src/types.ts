@@ -31,6 +31,7 @@ export interface PolygonSnapshot {
   readonly id: PolygonID;
   edgeIds: EdgeID[]; // ordered cycle (outer ring)
   holes: EdgeID[][]; // ordered cycles (inner rings)
+  vertexIds: VertexID[]; // unique vertices of the outer ring
   locked?: boolean; // default false — prevents shape editing
   active?: boolean; // default true — false marks as inactive (e.g. lake)
 }

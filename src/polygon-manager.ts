@@ -82,6 +82,7 @@ export class PolygonManager {
       newFaceData,
       previousPolygons,
       movedEdgeIds,
+      network,
     );
 
     return diff;
@@ -168,6 +169,7 @@ export class PolygonManager {
     }>,
     previousPolygons: Map<PolygonID, PolygonSnapshot>,
     movedEdgeIds: Set<EdgeID>,
+    network: Network,
   ): PolygonDiff {
     const diff: PolygonDiff = { created: [], modified: [], removed: [] };
     const usedPrevIds = new Set<PolygonID>();
@@ -203,6 +205,7 @@ export class PolygonManager {
           id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          vertexIds: collectVertexIds(newFace.edgeIds, network),
           ...(splitParent?.snap.locked != null && {
             locked: splitParent.snap.locked,
           }),
@@ -220,6 +223,7 @@ export class PolygonManager {
           id: prev.id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          vertexIds: collectVertexIds(newFace.edgeIds, network),
           ...(prev.snap.locked != null && { locked: prev.snap.locked }),
           ...(prev.snap.active != null && { active: prev.snap.active }),
         };
@@ -262,6 +266,7 @@ export class PolygonManager {
           id: bestMatch.id,
           edgeIds: newFace.edgeIds,
           holes: newFace.holes,
+          vertexIds: collectVertexIds(newFace.edgeIds, network),
           ...(bestMatch.snap.locked != null && {
             locked: bestMatch.snap.locked,
           }),
@@ -298,6 +303,70 @@ export class PolygonManager {
     // This is already handled above since overlapping finds unused prev IDs.
     // But order matters — let's sort new faces by area descending to ensure larger gets priority.
     // TODO: This is a simplification. For now, the iteration order determines priority.
+
+    // Vertex-based fallback: match unmatched new faces (created) against
+    // unmatched previous polygons using shared vertices.
+    // This handles cases where intersection resolution replaces all edge IDs
+    // but the topological vertex connectivity is preserved.
+    const unmatchedPrevEntries = prevEntries.filter(
+      (prev) => !usedPrevIds.has(prev.id),
+    );
+    if (unmatchedPrevEntries.length > 0 && diff.created.length > 0) {
+      // Collect vertices for each unmatched previous polygon (from stored vertexIds)
+      const prevVertexSets = unmatchedPrevEntries.map((prev) => ({
+        ...prev,
+        vertices: new Set(prev.snap.vertexIds),
+      }));
+
+      // Try to match each created face by vertex overlap
+      const remainingCreated: PolygonSnapshot[] = [];
+      for (const createdSnap of diff.created) {
+        const faceVertices = new Set(createdSnap.vertexIds);
+
+        // Find the best matching unmatched previous polygon (most shared vertices, ≥2)
+        let bestMatch: (typeof prevVertexSets)[number] | null = null;
+        let bestShared = 0;
+        for (const prev of prevVertexSets) {
+          if (usedPrevIds.has(prev.id)) continue;
+          let shared = 0;
+          for (const v of faceVertices) {
+            if (prev.vertices.has(v)) shared++;
+          }
+          if (shared >= 2 && shared > bestShared) {
+            bestShared = shared;
+            bestMatch = prev;
+          }
+        }
+
+        if (bestMatch) {
+          usedPrevIds.add(bestMatch.id);
+          // Re-register with inherited ID
+          const snap: PolygonSnapshot = {
+            id: bestMatch.id,
+            edgeIds: createdSnap.edgeIds,
+            holes: createdSnap.holes,
+            vertexIds: createdSnap.vertexIds,
+            ...(bestMatch.snap.locked != null && {
+              locked: bestMatch.snap.locked,
+            }),
+            ...(bestMatch.snap.active != null && {
+              active: bestMatch.snap.active,
+            }),
+          };
+          // Replace in newPolygons map
+          newPolygons.delete(createdSnap.id);
+          newPolygons.set(bestMatch.id, snap);
+          diff.modified.push({
+            id: bestMatch.id,
+            before: bestMatch.snap,
+            after: snap,
+          });
+        } else {
+          remainingCreated.push(createdSnap);
+        }
+      }
+      diff.created = remainingCreated;
+    }
 
     // Previous polygons that were not matched → removed
     for (const [id] of previousPolygons) {
@@ -439,4 +508,16 @@ function holesEqual(a: EdgeID[][], b: EdgeID[][]): boolean {
 function computeAreaFromEdgeCount(n: number): number {
   // Rough proxy when actual area isn't available
   return n;
+}
+
+function collectVertexIds(edgeIds: EdgeID[], network: Network): VertexID[] {
+  const set = new Set<VertexID>();
+  for (const eid of edgeIds) {
+    const edge = network.getEdge(eid);
+    if (edge) {
+      set.add(edge.v1);
+      set.add(edge.v2);
+    }
+  }
+  return [...set];
 }

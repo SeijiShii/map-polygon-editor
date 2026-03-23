@@ -162,6 +162,118 @@ describe("PolygonManager", () => {
       expect(diff.removed).toHaveLength(1);
     });
 
+    it("should preserve polygon ID when edges are split at intersection points (all edge IDs change)", () => {
+      // Simulate intersection resolution: each edge of a triangle is split
+      // through a midpoint vertex, replacing old edges with pairs of new edges.
+      // This models what happens when moveVertex causes intersections that
+      // split all edges of a polygon.
+      const network = new Network();
+      const v0 = network.addVertex(0, 0);
+      const v1 = network.addVertex(2, 0);
+      const v2 = network.addVertex(1, 2);
+      const e01 = network.addEdge(v0.id, v1.id);
+      const e12 = network.addEdge(v1.id, v2.id);
+      const e20 = network.addEdge(v2.id, v0.id);
+
+      // Build initial polygon
+      let faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      expect(manager.getAllPolygons()).toHaveLength(1);
+      const originalId = manager.getAllPolygons()[0]!.id;
+
+      // Simulate intersection resolution: split each edge through a new vertex
+      // This replaces every original edge ID with two new edge IDs
+      // (exactly what resolveIntersections does when splitting crossed edges)
+      network.removeEdge(e01.id);
+      const m01 = network.addVertex(1, 0); // midpoint of v0-v1
+      network.addEdge(v0.id, m01.id);
+      network.addEdge(m01.id, v1.id);
+
+      network.removeEdge(e12.id);
+      const m12 = network.addVertex(1.5, 1); // midpoint of v1-v2
+      network.addEdge(v1.id, m12.id);
+      network.addEdge(m12.id, v2.id);
+
+      network.removeEdge(e20.id);
+      const m20 = network.addVertex(0.5, 1); // midpoint of v2-v0
+      network.addEdge(v2.id, m20.id);
+      network.addEdge(m20.id, v0.id);
+
+      faces = enumerateFaces(network);
+      const diff = manager.updateFromFaces(faces, network);
+
+      // All original edge IDs are gone, but all original vertices remain.
+      // Vertex-based fallback matching should preserve the polygon ID.
+      expect(manager.getAllPolygons()).toHaveLength(1);
+      expect(manager.getAllPolygons()[0]!.id).toBe(originalId);
+      expect(diff.created).toHaveLength(0);
+      expect(diff.removed).toHaveLength(0);
+    });
+
+    it("should still assign new ID on genuine split (edge addition creates two polygons)", () => {
+      // Start with a square — add diagonal to split into 2 triangles
+      const { network, vertices } = buildNetwork(
+        [
+          [0, 0],
+          [2, 0],
+          [2, 1],
+          [0, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 3],
+          [3, 0],
+        ],
+      );
+      let faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      const originalId = manager.getAllPolygons()[0]!.id;
+
+      // Add diagonal → genuinely splits into 2 polygons
+      network.addEdge(vertices[0]!.id, vertices[2]!.id);
+      faces = enumerateFaces(network);
+      const diff = manager.updateFromFaces(faces, network);
+
+      expect(manager.getAllPolygons()).toHaveLength(2);
+      const ids = manager.getAllPolygons().map((p) => p.id);
+      expect(ids).toContain(originalId);
+      // One polygon inherits ID, the other is new
+      expect(diff.created).toHaveLength(1);
+      expect(diff.created[0]!.id).not.toBe(originalId);
+    });
+
+    it("should report modified when vertex moves without intersection (edge set unchanged)", () => {
+      const { network, vertices } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      let faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      const originalId = manager.getAllPolygons()[0]!.id;
+
+      // Move vertex slightly — no intersection, same edge IDs
+      network.moveVertex(vertices[0]!.id, 0.1, 0.1);
+      faces = enumerateFaces(network);
+      const movedVertexIds = new Set([vertices[0]!.id]);
+      const diff = manager.updateFromFaces(faces, network, movedVertexIds);
+
+      expect(manager.getAllPolygons()).toHaveLength(1);
+      expect(manager.getAllPolygons()[0]!.id).toBe(originalId);
+      expect(diff.modified).toHaveLength(1);
+      expect(diff.modified[0]!.id).toBe(originalId);
+      expect(diff.created).toHaveLength(0);
+      expect(diff.removed).toHaveLength(0);
+    });
+
     it("should remove polygon when face disappears", () => {
       const { network, vertices } = buildNetwork(
         [
@@ -333,6 +445,7 @@ describe("PolygonManager", () => {
         id: polygonId,
         edgeIds: [e1.id, e3.id, e2.id],
         holes: [],
+        vertexIds: [v1.id, v2.id, v3.id],
       });
 
       const geojson = manager.toGeoJSON(polygonId, network);
