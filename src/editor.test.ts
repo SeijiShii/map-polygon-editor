@@ -201,6 +201,86 @@ describe("NetworkPolygonEditor", () => {
       expect(editor.getVertex(vId)!.lng).toBe(0);
     });
 
+    it("should preserve both polygon IDs when dragging a vertex of one polygon (two separate polygons)", () => {
+      // Draw polygon 1 (left triangle)
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(2, 0);
+      editor.placeVertex(1, 2);
+      const firstV1 = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!;
+      editor.snapToVertex(firstV1.id);
+      expect(editor.getPolygons()).toHaveLength(1);
+      const polyId1 = editor.getPolygons()[0]!.id;
+
+      // Draw polygon 2 (right triangle, separate)
+      editor.startDrawing();
+      editor.placeVertex(5, 0);
+      editor.placeVertex(7, 0);
+      editor.placeVertex(6, 2);
+      const firstV2 = editor
+        .getVertices()
+        .find((v) => v.lat === 5 && v.lng === 0)!;
+      editor.snapToVertex(firstV2.id);
+      expect(editor.getPolygons()).toHaveLength(2);
+      const polyId2 = editor.getPolygons().find((p) => p.id !== polyId1)!.id;
+
+      // Drag a vertex of polygon 1
+      const dragTarget = editor
+        .getVertices()
+        .find((v) => v.lat === 1 && v.lng === 2)!;
+      editor.beginDrag(dragTarget.id);
+      editor.dragTo(1.2, 2.1);
+      editor.dragTo(1.5, 1.8);
+      const cs = editor.endDrag();
+
+      // Both polygon IDs must be preserved
+      const currentIds = editor.getPolygons().map((p) => p.id);
+      expect(currentIds).toContain(polyId1);
+      expect(currentIds).toContain(polyId2);
+      expect(cs.polygons.removed).toHaveLength(0);
+      expect(cs.polygons.created).toHaveLength(0);
+    });
+
+    it("should preserve both polygon IDs when dragging a shared vertex (two adjacent polygons)", () => {
+      // Draw polygon 1 (left triangle): v0(0,0) - v1(2,0) - v2(1,2)
+      editor.startDrawing();
+      editor.placeVertex(0, 0);
+      editor.placeVertex(2, 0);
+      editor.placeVertex(1, 2);
+      const firstV1 = editor
+        .getVertices()
+        .find((v) => v.lat === 0 && v.lng === 0)!;
+      editor.snapToVertex(firstV1.id);
+      expect(editor.getPolygons()).toHaveLength(1);
+      const polyId1 = editor.getPolygons()[0]!.id;
+
+      // Draw polygon 2 adjacent to polygon 1, sharing edge v1(2,0)-v2(1,2)
+      // New vertex v3(3,1), connect v1 → v3 → v2
+      const v1 = editor.getVertices().find((v) => v.lat === 2 && v.lng === 0)!;
+      const v2 = editor.getVertices().find((v) => v.lat === 1 && v.lng === 2)!;
+      editor.startDrawing();
+      editor.snapToVertex(v1.id);
+      editor.placeVertex(3, 1);
+      editor.snapToVertex(v2.id);
+      expect(editor.getPolygons()).toHaveLength(2);
+      const polyId2 = editor.getPolygons().find((p) => p.id !== polyId1)!.id;
+
+      // Drag the shared vertex v2(1,2) slightly
+      editor.beginDrag(v2.id);
+      editor.dragTo(1.1, 2.1);
+      editor.dragTo(1.2, 1.9);
+      const cs = editor.endDrag();
+
+      // Both polygon IDs must be preserved
+      const currentIds = editor.getPolygons().map((p) => p.id);
+      expect(currentIds).toContain(polyId1);
+      expect(currentIds).toContain(polyId2);
+      expect(cs.polygons.removed).toHaveLength(0);
+      expect(cs.polygons.created).toHaveLength(0);
+    });
+
     it("should throw if dragTo called without beginDrag", () => {
       expect(() => editor.dragTo(0, 0)).toThrow("No drag in progress");
     });

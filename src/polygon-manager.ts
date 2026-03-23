@@ -242,25 +242,17 @@ export class PolygonManager {
           diff.modified.push({ id: prev.id, before: prev.snap, after: snap });
         }
       } else {
-        // Merge: multiple previous polygons → one new face
-        // Largest area previous polygon inherits UUID
-        const largest = overlapping.reduce((a, b) => {
-          const aArea = computeAreaFromEdgeCount(a.edgeSet.size);
-          const bArea = computeAreaFromEdgeCount(b.edgeSet.size);
-          return aArea >= bArea ? a : b;
-        });
-
-        // Actually use area from the face data we have
-        // For merge, inherit the UUID from the one with more shared edges
+        // Multiple previous polygons share edges with this face.
+        // Pick the best match (most shared edges) — only claim that one.
+        // Leave others available for subsequent faces to match.
+        // True merges are detected later: unclaimed prev polygons become "removed".
         const bestMatch = overlapping.reduce((a, b) => {
           const aOverlap = intersectionSize(newEdgeSet, a.edgeSet);
           const bOverlap = intersectionSize(newEdgeSet, b.edgeSet);
           return aOverlap >= bOverlap ? a : b;
         });
 
-        for (const prev of overlapping) {
-          usedPrevIds.add(prev.id);
-        }
+        usedPrevIds.add(bestMatch.id);
 
         const snap: PolygonSnapshot = {
           id: bestMatch.id,
@@ -280,13 +272,6 @@ export class PolygonManager {
           before: bestMatch.snap,
           after: snap,
         });
-
-        // Other merged polygons are removed
-        for (const prev of overlapping) {
-          if (prev.id !== bestMatch.id) {
-            diff.removed.push(prev.id);
-          }
-        }
       }
     }
 
