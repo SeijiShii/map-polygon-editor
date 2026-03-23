@@ -1,6 +1,6 @@
 {
   "name": "map-polygon-editor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Data-layer library for map polygon editing with area hierarchies",
   "type": "module",
   "main": "./dist/index.cjs",
