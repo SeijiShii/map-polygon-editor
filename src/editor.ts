@@ -26,6 +26,9 @@ export class NetworkPolygonEditor {
   private undoRedo: UndoRedoManager;
   private adapter: StorageAdapter | null;
 
+  /** Callback invoked when a remote change is applied via onRemoteChange */
+  onRemoteUpdate?: (cs: ChangeSet) => void;
+
   constructor(adapter?: StorageAdapter) {
     this.network = new Network();
     this.polygonManager = new PolygonManager();
@@ -72,15 +75,139 @@ export class NetworkPolygonEditor {
         }
       }
     }
+
+    // Register remote change handler
+    this.adapter?.onRemoteChange?.((change) => {
+      const result = this.applyRemoteChange(change);
+      this.onRemoteUpdate?.(result);
+    });
   }
 
-  async save(): Promise<void> {
+  // --- Record-level persistence ---
+
+  private persistChangeSet(cs: ChangeSet): void {
     if (!this.adapter) return;
-    await this.adapter.saveAll({
-      vertices: this.network.getAllVertices(),
-      edges: this.network.getAllEdges(),
-      polygons: this.polygonManager.getAllPolygons(),
-    });
+    const a = this.adapter;
+
+    // Vertices
+    for (const v of cs.vertices.added) {
+      a.putVertex(v);
+    }
+    for (const id of cs.vertices.removed) {
+      a.deleteVertex(id);
+    }
+    for (const moved of cs.vertices.moved) {
+      const v = this.network.getVertex(moved.id);
+      if (v) a.putVertex(v);
+    }
+
+    // Edges
+    for (const e of cs.edges.added) {
+      a.putEdge(e);
+    }
+    for (const id of cs.edges.removed) {
+      a.deleteEdge(id);
+    }
+
+    // Polygons
+    for (const p of cs.polygons.created) {
+      a.putPolygon(p);
+    }
+    for (const mod of cs.polygons.modified) {
+      a.putPolygon(mod.after);
+    }
+    for (const id of cs.polygons.removed) {
+      a.deletePolygon(id);
+    }
+    for (const sc of cs.polygons.statusChanged) {
+      const snap = this.polygonManager.getPolygon(sc.id);
+      if (snap) a.putPolygon(snap);
+    }
+  }
+
+  // --- Remote change application ---
+
+  applyRemoteChange(change: ChangeSet): ChangeSet {
+    const result = emptyChangeSet();
+
+    // Apply vertex additions
+    for (const v of change.vertices.added) {
+      if (!this.network.getVertex(v.id)) {
+        this.network.addVertex(v.lat, v.lng, v.id);
+        result.vertices.added.push(v);
+      }
+    }
+
+    // Apply vertex moves
+    for (const moved of change.vertices.moved) {
+      if (this.network.getVertex(moved.id)) {
+        this.network.moveVertex(moved.id, moved.to.lat, moved.to.lng);
+        result.vertices.moved.push(moved);
+      }
+    }
+
+    // Apply edge removals (before additions, to handle replacements)
+    for (const id of change.edges.removed) {
+      if (this.network.getEdge(id)) {
+        this.network.removeEdge(id);
+        result.edges.removed.push(id);
+      }
+    }
+
+    // Apply edge additions
+    for (const e of change.edges.added) {
+      if (
+        !this.network.getEdge(e.id) &&
+        this.network.getVertex(e.v1) &&
+        this.network.getVertex(e.v2)
+      ) {
+        this.network.addEdge(e.v1, e.v2, e.id);
+        result.edges.added.push(e);
+      }
+    }
+
+    // Apply vertex removals (after edge removals)
+    for (const id of change.vertices.removed) {
+      if (this.network.getVertex(id)) {
+        const removedEdges = this.network.removeVertex(id);
+        result.vertices.removed.push(id);
+        result.edges.removed.push(...removedEdges);
+      }
+    }
+
+    // Apply status changes
+    for (const sc of change.polygons.statusChanged) {
+      const snap = this.polygonManager.getPolygon(sc.id);
+      if (snap) {
+        this.polygonManager.setStatus(sc.id, sc.field, sc.after);
+        result.polygons.statusChanged.push(sc);
+      }
+    }
+
+    // Rebuild polygons after structural or move changes
+    const hasStructuralChange =
+      result.vertices.added.length > 0 ||
+      result.vertices.removed.length > 0 ||
+      result.vertices.moved.length > 0 ||
+      result.edges.added.length > 0 ||
+      result.edges.removed.length > 0;
+
+    if (hasStructuralChange) {
+      const movedVertexIds = new Set(result.vertices.moved.map((m) => m.id));
+      const faces = enumerateFaces(this.network);
+      const diff = this.polygonManager.updateFromFaces(
+        faces,
+        this.network,
+        movedVertexIds.size > 0 ? movedVertexIds : undefined,
+      );
+      result.polygons.created.push(...diff.created);
+      result.polygons.modified.push(...diff.modified);
+      result.polygons.removed.push(...diff.removed);
+    }
+
+    // Do NOT push to undo stack — remote changes are not undoable
+    // Do NOT persist — avoid echoing back to remote
+    return result;
   }
 
   // --- Mode ---
@@ -103,6 +230,7 @@ export class NetworkPolygonEditor {
   placeVertex(lat: number, lng: number): ChangeSet {
     const cs = this.drawingMode.placeVertex(lat, lng);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -110,11 +238,13 @@ export class NetworkPolygonEditor {
     if (this.drawingMode.isActive()) {
       const cs = this.drawingMode.snapToExistingVertex(vertexId);
       this.undoRedo.push(cs);
+      this.persistChangeSet(cs);
       return cs;
     }
     // Non-drawing mode: connect two vertices (edit operation)
     const cs = this.operations.snapToVertex(vertexId, vertexId); // This doesn't make sense — need fromId
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -122,6 +252,7 @@ export class NetworkPolygonEditor {
     if (this.drawingMode.isActive()) {
       const cs = this.drawingMode.snapToExistingEdge(edgeId, lat, lng);
       this.undoRedo.push(cs);
+      this.persistChangeSet(cs);
       return cs;
     }
     return emptyChangeSet();
@@ -166,6 +297,7 @@ export class NetworkPolygonEditor {
     this.network.moveVertex(id, origLat, origLng);
     const cs = this.operations.moveVertex(id, finalLat, finalLng);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -182,30 +314,35 @@ export class NetworkPolygonEditor {
   moveVertex(vertexId: VertexID, lat: number, lng: number): ChangeSet {
     const cs = this.operations.moveVertex(vertexId, lat, lng);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
   removeVertex(vertexId: VertexID): ChangeSet {
     const cs = this.operations.removeVertex(vertexId);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
   removeEdge(edgeId: EdgeID): ChangeSet {
     const cs = this.operations.removeEdge(edgeId);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
   removePolygon(polygonId: PolygonID): ChangeSet {
     const cs = this.operations.removePolygon(polygonId);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
   splitEdge(edgeId: EdgeID, lat: number, lng: number): ChangeSet {
     const cs = this.operations.splitEdgeAtPoint(edgeId, lat, lng);
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -221,6 +358,7 @@ export class NetworkPolygonEditor {
       after: result.after,
     });
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -234,6 +372,7 @@ export class NetworkPolygonEditor {
       after: result.after,
     });
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 
@@ -258,11 +397,15 @@ export class NetworkPolygonEditor {
   }
 
   undo(): ChangeSet | null {
-    return this.undoRedo.undo();
+    const cs = this.undoRedo.undo();
+    if (cs) this.persistChangeSet(cs);
+    return cs;
   }
 
   redo(): ChangeSet | null {
-    return this.undoRedo.redo();
+    const cs = this.undoRedo.redo();
+    if (cs) this.persistChangeSet(cs);
+    return cs;
   }
 
   // --- Cleanup ---
@@ -305,6 +448,7 @@ export class NetworkPolygonEditor {
     }
 
     this.undoRedo.push(cs);
+    this.persistChangeSet(cs);
     return cs;
   }
 

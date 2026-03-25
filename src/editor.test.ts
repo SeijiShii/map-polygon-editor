@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { NetworkPolygonEditor } from "./editor";
-import { LockedPolygonError } from "./types";
+import { LockedPolygonError, type StorageAdapter } from "./types";
 
 describe("NetworkPolygonEditor", () => {
   let editor: NetworkPolygonEditor;
@@ -370,26 +370,39 @@ describe("NetworkPolygonEditor", () => {
   });
 
   describe("persistence", () => {
-    it("should save and load via StorageAdapter", async () => {
-      editor.startDrawing();
-      editor.placeVertex(0, 0);
-      editor.placeVertex(1, 0);
-      editor.placeVertex(0.5, 1);
-      const vertices = editor.getVertices();
-      const first = vertices.find((v) => v.lat === 0 && v.lng === 0)!;
-      editor.snapToVertex(first.id);
-
-      // Save
-      let savedData: any = null;
-      const adapter = {
-        loadAll: async () => savedData,
-        saveAll: async (data: any) => {
-          savedData = data;
+    it("should auto-persist and load via StorageAdapter", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
         },
       };
 
       const editorWithAdapter = new NetworkPolygonEditor(adapter);
-      // Replicate state
       editorWithAdapter.startDrawing();
       editorWithAdapter.placeVertex(0, 0);
       editorWithAdapter.placeVertex(1, 0);
@@ -397,10 +410,9 @@ describe("NetworkPolygonEditor", () => {
       const verts = editorWithAdapter.getVertices();
       const firstV = verts.find((v) => v.lat === 0 && v.lng === 0)!;
       editorWithAdapter.snapToVertex(firstV.id);
-      await editorWithAdapter.save();
 
-      expect(savedData).not.toBeNull();
-      expect(savedData.vertices.length).toBe(3);
+      // Auto-persisted via put calls
+      expect(store.vertices.size).toBe(3);
 
       // Load into new editor
       const editor2 = new NetworkPolygonEditor(adapter);
@@ -593,12 +605,35 @@ describe("NetworkPolygonEditor", () => {
       expect(() => editor.beginDrag(vId)).toThrow(LockedPolygonError);
     });
 
-    it("should preserve status through save/load cycle", async () => {
-      let savedData: any = null;
-      const adapter = {
-        loadAll: async () => savedData,
-        saveAll: async (data: any) => {
-          savedData = data;
+    it("should preserve status through auto-persist/load cycle", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
         },
       };
 
@@ -612,7 +647,6 @@ describe("NetworkPolygonEditor", () => {
       const polyId = ed1.getPolygons()[0]!.id;
       ed1.setPolygonLocked(polyId, true);
       ed1.setPolygonActive(polyId, false);
-      await ed1.save();
 
       // Load into new editor
       const ed2 = new NetworkPolygonEditor(adapter);
