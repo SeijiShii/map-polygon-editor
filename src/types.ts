@@ -89,13 +89,20 @@ export interface StorageAdapter {
     polygons: PolygonSnapshot[];
   }>;
 
-  // Record-level operations
-  putVertex(vertex: Vertex): Promise<void>;
-  deleteVertex(id: VertexID): Promise<void>;
-  putEdge(edge: Edge): Promise<void>;
-  deleteEdge(id: EdgeID): Promise<void>;
-  putPolygon(polygon: PolygonSnapshot): Promise<void>;
-  deletePolygon(id: PolygonID): Promise<void>;
+  // Batch persistence (legacy / simple adapters)
+  saveAll?(data: {
+    vertices: Vertex[];
+    edges: Edge[];
+    polygons: PolygonSnapshot[];
+  }): Promise<void>;
+
+  // Record-level operations (optional if saveAll is provided)
+  putVertex?(vertex: Vertex): Promise<void>;
+  deleteVertex?(id: VertexID): Promise<void>;
+  putEdge?(edge: Edge): Promise<void>;
+  deleteEdge?(id: EdgeID): Promise<void>;
+  putPolygon?(polygon: PolygonSnapshot): Promise<void>;
+  deletePolygon?(id: PolygonID): Promise<void>;
 
   // Remote change subscription (optional)
   onRemoteChange?(handler: (change: ChangeSet) => void): void;

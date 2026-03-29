@@ -83,45 +83,68 @@ export class NetworkPolygonEditor {
     });
   }
 
+  // --- Batch persistence (legacy) ---
+
+  async save(): Promise<void> {
+    if (!this.adapter) return;
+    if (!this.adapter.saveAll) return;
+    await this.adapter.saveAll({
+      vertices: this.network.getAllVertices(),
+      edges: this.network.getAllEdges(),
+      polygons: this.polygonManager.getAllPolygons(),
+    });
+  }
+
   // --- Record-level persistence ---
 
   private persistChangeSet(cs: ChangeSet): void {
     if (!this.adapter) return;
     const a = this.adapter;
 
-    // Vertices
-    for (const v of cs.vertices.added) {
-      a.putVertex(v);
+    // If adapter has record-level operations, use them
+    if (a.putVertex) {
+      // Vertices
+      for (const v of cs.vertices.added) {
+        a.putVertex(v);
+      }
+      for (const moved of cs.vertices.moved) {
+        const v = this.network.getVertex(moved.id);
+        if (v) a.putVertex(v);
+      }
     }
-    for (const id of cs.vertices.removed) {
-      a.deleteVertex(id);
-    }
-    for (const moved of cs.vertices.moved) {
-      const v = this.network.getVertex(moved.id);
-      if (v) a.putVertex(v);
-    }
-
-    // Edges
-    for (const e of cs.edges.added) {
-      a.putEdge(e);
-    }
-    for (const id of cs.edges.removed) {
-      a.deleteEdge(id);
+    if (a.deleteVertex) {
+      for (const id of cs.vertices.removed) {
+        a.deleteVertex(id);
+      }
     }
 
-    // Polygons
-    for (const p of cs.polygons.created) {
-      a.putPolygon(p);
+    if (a.putEdge) {
+      for (const e of cs.edges.added) {
+        a.putEdge(e);
+      }
     }
-    for (const mod of cs.polygons.modified) {
-      a.putPolygon(mod.after);
+    if (a.deleteEdge) {
+      for (const id of cs.edges.removed) {
+        a.deleteEdge(id);
+      }
     }
-    for (const id of cs.polygons.removed) {
-      a.deletePolygon(id);
+
+    if (a.putPolygon) {
+      for (const p of cs.polygons.created) {
+        a.putPolygon(p);
+      }
+      for (const mod of cs.polygons.modified) {
+        a.putPolygon(mod.after);
+      }
+      for (const sc of cs.polygons.statusChanged) {
+        const snap = this.polygonManager.getPolygon(sc.id);
+        if (snap) a.putPolygon(snap);
+      }
     }
-    for (const sc of cs.polygons.statusChanged) {
-      const snap = this.polygonManager.getPolygon(sc.id);
-      if (snap) a.putPolygon(snap);
+    if (a.deletePolygon) {
+      for (const id of cs.polygons.removed) {
+        a.deletePolygon(id);
+      }
     }
   }
 
