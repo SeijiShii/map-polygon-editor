@@ -78,7 +78,7 @@ const geojson = editor.getAllGeoJSON();
 
 ## ステータス
 
-v3 実装完了。128テスト通過。
+v3 実装完了。208テスト通過。変更履歴は [docs/CHANGELOG.md](docs/CHANGELOG.md) 参照。
 
 [![npm version](https://img.shields.io/npm/v/map-polygon-editor.svg)](https://www.npmjs.com/package/map-polygon-editor)
 [![license](https://img.shields.io/npm/l/map-polygon-editor.svg)](https://github.com/SeijiShii/map-polygon-editor/blob/main/LICENSE)

@@ -3,7 +3,7 @@ import { Network } from "./network";
 import { PolygonManager } from "./polygon-manager";
 import { enumerateFaces } from "./half-edge";
 import { createPolygonID } from "./types";
-import type { PolygonSnapshot, PolygonID, Face } from "./types";
+import type { PolygonSnapshot } from "./types";
 
 /**
  * Helper: build a network from coordinate pairs and edge definitions.
@@ -619,6 +619,106 @@ describe("PolygonManager", () => {
     it("should throw on setStatus for non-existent polygon", () => {
       const fakeId = createPolygonID("nonexistent");
       expect(() => manager.setStatus(fakeId, "locked", true)).toThrow();
+    });
+  });
+
+  describe("loadSnapshots", () => {
+    it("should populate internal map so getAllPolygons returns loaded snapshots", () => {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const edges = network.getAllEdges();
+      const vertices = network.getAllVertices();
+      const snap: PolygonSnapshot = {
+        id: createPolygonID("persisted-poly"),
+        edgeIds: edges.map((e) => e.id),
+        holes: [],
+        vertexIds: vertices.map((v) => v.id),
+        locked: true,
+        active: false,
+      };
+
+      manager.loadSnapshots([snap]);
+
+      const loaded = manager.getAllPolygons();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]!.id).toBe(snap.id);
+      expect(loaded[0]!.locked).toBe(true);
+      expect(loaded[0]!.active).toBe(false);
+    });
+
+    it("should let subsequent updateFromFaces preserve loaded polygon ID", () => {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const edges = network.getAllEdges();
+      const vertices = network.getAllVertices();
+      const persistedId = createPolygonID("persisted-poly");
+      const snap: PolygonSnapshot = {
+        id: persistedId,
+        edgeIds: edges.map((e) => e.id),
+        holes: [],
+        vertexIds: vertices.map((v) => v.id),
+        locked: true,
+      };
+
+      manager.loadSnapshots([snap]);
+      const faces = enumerateFaces(network);
+      const diff = manager.updateFromFaces(faces, network);
+
+      expect(manager.getAllPolygons()).toHaveLength(1);
+      expect(manager.getAllPolygons()[0]!.id).toBe(persistedId);
+      expect(manager.getAllPolygons()[0]!.locked).toBe(true);
+      expect(diff.created).toHaveLength(0);
+      expect(diff.removed).toHaveLength(0);
+    });
+
+    it("should replace existing polygons when called again", () => {
+      const { network } = buildNetwork(
+        [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        [
+          [0, 1],
+          [1, 2],
+          [2, 0],
+        ],
+      );
+      const faces = enumerateFaces(network);
+      manager.updateFromFaces(faces, network);
+      expect(manager.getAllPolygons()).toHaveLength(1);
+
+      const replacement: PolygonSnapshot = {
+        id: createPolygonID("replacement"),
+        edgeIds: network.getAllEdges().map((e) => e.id),
+        holes: [],
+        vertexIds: network.getAllVertices().map((v) => v.id),
+      };
+      manager.loadSnapshots([replacement]);
+
+      const result = manager.getAllPolygons();
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe(replacement.id);
     });
   });
 });

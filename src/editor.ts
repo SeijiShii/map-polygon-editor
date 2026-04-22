@@ -53,28 +53,14 @@ export class NetworkPolygonEditor {
     for (const e of data.edges) {
       this.network.addEdge(e.v1, e.v2, e.id);
     }
+    // Seed previousPolygons so updateFromFaces can inherit IDs and status
+    // via matchIdentity's edgeSet / vertexSet overlap.
+    if (data.polygons) {
+      this.polygonManager.loadSnapshots(data.polygons);
+    }
     // Rebuild polygon snapshots from network
     const faces = enumerateFaces(this.network);
     this.polygonManager.updateFromFaces(faces, this.network);
-
-    // Restore status from loaded polygon data
-    if (data.polygons) {
-      const loadedByEdgeKey = new Map<string, PolygonSnapshot>();
-      for (const p of data.polygons) {
-        const key = [...p.edgeIds].sort().join(",");
-        loadedByEdgeKey.set(key, p);
-      }
-      for (const poly of this.polygonManager.getAllPolygons()) {
-        const key = [...poly.edgeIds].sort().join(",");
-        const loaded = loadedByEdgeKey.get(key);
-        if (loaded) {
-          if (loaded.locked != null)
-            this.polygonManager.setStatus(poly.id, "locked", loaded.locked);
-          if (loaded.active != null)
-            this.polygonManager.setStatus(poly.id, "active", loaded.active);
-        }
-      }
-    }
 
     // Register remote change handler
     this.adapter?.onRemoteChange?.((change) => {

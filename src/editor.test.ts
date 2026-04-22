@@ -420,6 +420,216 @@ describe("NetworkPolygonEditor", () => {
       expect(editor2.getVertices()).toHaveLength(3);
       expect(editor2.getPolygons()).toHaveLength(1);
     });
+
+    it("should preserve polygon ID across init() reloads", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
+        },
+      };
+
+      const ed1 = new NetworkPolygonEditor(adapter);
+      ed1.startDrawing();
+      ed1.placeVertex(0, 0);
+      ed1.placeVertex(1, 0);
+      ed1.placeVertex(1, 1);
+      ed1.placeVertex(0, 1);
+      const first = ed1.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed1.snapToVertex(first.id);
+      const id1 = ed1.getPolygons()[0]!.id;
+
+      const ed2 = new NetworkPolygonEditor(adapter);
+      await ed2.init();
+      expect(ed2.getPolygons()).toHaveLength(1);
+      expect(ed2.getPolygons()[0]!.id).toBe(id1);
+    });
+
+    it("should preserve polygon ID after moving a vertex and reloading", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
+        },
+      };
+
+      const ed1 = new NetworkPolygonEditor(adapter);
+      ed1.startDrawing();
+      ed1.placeVertex(0, 0);
+      ed1.placeVertex(1, 0);
+      ed1.placeVertex(0.5, 1);
+      const first = ed1.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed1.snapToVertex(first.id);
+      const id1 = ed1.getPolygons()[0]!.id;
+
+      // Move a vertex — edgeSet unchanged
+      const movingVertex = ed1
+        .getVertices()
+        .find((v) => v.lat === 0.5 && v.lng === 1)!;
+      ed1.moveVertex(movingVertex.id, 0.7, 1.2);
+
+      const ed2 = new NetworkPolygonEditor(adapter);
+      await ed2.init();
+      expect(ed2.getPolygons()).toHaveLength(1);
+      expect(ed2.getPolygons()[0]!.id).toBe(id1);
+    });
+
+    it("should preserve polygon ID together with locked/active through reload", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
+        },
+      };
+
+      const ed1 = new NetworkPolygonEditor(adapter);
+      ed1.startDrawing();
+      ed1.placeVertex(0, 0);
+      ed1.placeVertex(1, 0);
+      ed1.placeVertex(0.5, 1);
+      const first = ed1.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed1.snapToVertex(first.id);
+      const polyId = ed1.getPolygons()[0]!.id;
+      ed1.setPolygonLocked(polyId, true);
+      ed1.setPolygonActive(polyId, false);
+
+      const ed2 = new NetworkPolygonEditor(adapter);
+      await ed2.init();
+      const loaded = ed2.getPolygons()[0]!;
+      expect(loaded.id).toBe(polyId);
+      expect(loaded.locked).toBe(true);
+      expect(loaded.active).toBe(false);
+    });
+
+    it("should assign a new ID when the polygon is fully replaced", async () => {
+      const store = {
+        vertices: new Map<string, any>(),
+        edges: new Map<string, any>(),
+        polygons: new Map<string, any>(),
+      };
+      const adapter: StorageAdapter = {
+        loadAll: async () => ({
+          vertices: [...store.vertices.values()],
+          edges: [...store.edges.values()],
+          polygons: [...store.polygons.values()],
+        }),
+        putVertex: async (v) => {
+          store.vertices.set(v.id, v);
+        },
+        deleteVertex: async (id) => {
+          store.vertices.delete(id);
+        },
+        putEdge: async (e) => {
+          store.edges.set(e.id, e);
+        },
+        deleteEdge: async (id) => {
+          store.edges.delete(id);
+        },
+        putPolygon: async (p) => {
+          store.polygons.set(p.id, p);
+        },
+        deletePolygon: async (id) => {
+          store.polygons.delete(id);
+        },
+      };
+
+      const ed1 = new NetworkPolygonEditor(adapter);
+      ed1.startDrawing();
+      ed1.placeVertex(0, 0);
+      ed1.placeVertex(1, 0);
+      ed1.placeVertex(0.5, 1);
+      const first = ed1.getVertices().find((v) => v.lat === 0 && v.lng === 0)!;
+      ed1.snapToVertex(first.id);
+      const originalId = ed1.getPolygons()[0]!.id;
+
+      // Delete the polygon entirely, then draw a different one far away
+      ed1.removePolygon(originalId);
+      ed1.startDrawing();
+      ed1.placeVertex(10, 10);
+      ed1.placeVertex(11, 10);
+      ed1.placeVertex(10.5, 11);
+      const newFirst = ed1
+        .getVertices()
+        .find((v) => v.lat === 10 && v.lng === 10)!;
+      ed1.snapToVertex(newFirst.id);
+
+      const ed2 = new NetworkPolygonEditor(adapter);
+      await ed2.init();
+      expect(ed2.getPolygons()).toHaveLength(1);
+      expect(ed2.getPolygons()[0]!.id).not.toBe(originalId);
+    });
   });
 
   describe("removePolygon", () => {
@@ -653,6 +863,7 @@ describe("NetworkPolygonEditor", () => {
       await ed2.init();
       expect(ed2.getPolygons()).toHaveLength(1);
       const loadedPoly = ed2.getPolygons()[0]!;
+      expect(loadedPoly.id).toBe(polyId);
       expect(loadedPoly.locked).toBe(true);
       expect(loadedPoly.active).toBe(false);
     });

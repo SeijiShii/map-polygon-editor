@@ -33,6 +33,18 @@ export class PolygonManager {
     return this.polygons.get(id) ?? null;
   }
 
+  /**
+   * Replace the internal polygon map with the given snapshots.
+   * Intended for NetworkPolygonEditor.init() to seed previousPolygons before
+   * updateFromFaces so matchIdentity can inherit IDs via edgeSet / vertexSet overlap.
+   */
+  loadSnapshots(snapshots: readonly PolygonSnapshot[]): void {
+    this.polygons.clear();
+    for (const snap of snapshots) {
+      this.polygons.set(snap.id, snap);
+    }
+  }
+
   setStatus(
     id: PolygonID,
     field: PolygonStatusField,
